@@ -23,7 +23,7 @@ def main():
 
     out_json_filename = args.out
 
-    char_set = set()
+    char_set = set(" ")
 
     directory = os.fsencode(args.dir)
     for file in tqdm(os.listdir(directory)):
