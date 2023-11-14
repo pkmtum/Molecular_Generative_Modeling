@@ -1,7 +1,9 @@
 import os
 import argparse
 import csv
+
 from tqdm import tqdm
+from rdkit.Chem import AllChem as Chem
 
 
 def read_xyz_file(filename, csv_writer, max_heavy, property_index_list):
@@ -23,6 +25,13 @@ def read_xyz_file(filename, csv_writer, max_heavy, property_index_list):
         return False
 
     smiles = lines[atom_count + 3].split()[1]
+
+    try:
+        Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
+    except Exception:
+        print(f"Discarding smiles: {smiles}")
+        return False
+
     csv_writer.writerow([smiles] + properties)
     return True
 
@@ -31,7 +40,7 @@ def main():
     parser = argparse.ArgumentParser(description="Create csv file containing smiles and molecule properties from .xyz files")
     parser.add_argument("--dir", type=str, help="Directory containing xyz files.")
     parser.add_argument("--out", default="qm9.csv", type=str, help="Output csv filename")
-    parser.add_argument("--heavy", default=8, type=int, help="Maximum number of heavy atoms allowed.")
+    parser.add_argument("--heavy", default=9, type=int, help="Maximum number of heavy atoms allowed.")
     parser.add_argument("--props", default="", type=str, help="Comma seperated properties to include in the csv file. Defaults to all.")
 
     args = parser.parse_args()
@@ -50,6 +59,8 @@ def main():
 
     out_csv_filename = args.out
 
+    discarded_count = 0
+
     with open(out_csv_filename, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         columns = ["smiles"] + properties
@@ -63,8 +74,11 @@ def main():
                 if read_xyz_file(filepath, writer, args.heavy,
                                  property_index_list):
                     total_count += 1
+                else:
+                    discarded_count += 1
 
     print(f"Wrote {total_count} molecules to {out_csv_filename}.")
+    print(f"Discarded {discarded_count} molecules to from the original dataset.")
 
 if __name__ == "__main__":
     main()
