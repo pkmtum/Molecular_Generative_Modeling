@@ -29,7 +29,15 @@ def read_xyz_file(filename, csv_writer, max_heavy, property_index_list):
     try:
         smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
     except Exception:
-        print(f"Discarding smiles: {smiles}")
+        print(f"Discarding non-canonical smiles: {smiles}")
+        return False
+
+    if len(smiles) > 34:
+        print(f"Discarding too long smiles {smiles}")
+        return False
+    
+    if "." in smiles:
+        print(f"Discarding smiles of disconnected molecule: {smiles}")
         return False
 
     csv_writer.writerow([smiles] + properties)

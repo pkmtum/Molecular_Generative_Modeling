@@ -18,7 +18,14 @@ def get_charset_from_xyz(filename):
         smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
     except Exception:
         smiles = ""
-    return set(smiles)
+
+    if len(smiles) > 34:
+        smiles = ""
+
+    out = set(smiles)
+    if "." in out:
+        out.remove(".")
+    return out
 
 
 def main():
