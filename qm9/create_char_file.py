@@ -3,6 +3,8 @@ import argparse
 import json
 from tqdm import tqdm
 
+from rdkit.Chem import AllChem as Chem
+
 
 def get_charset_from_xyz(filename):
     file = open(filename, 'r')
@@ -11,6 +13,11 @@ def get_charset_from_xyz(filename):
     atom_count = int(lines[0])
 
     smiles = lines[atom_count + 3].split()[1]
+
+    try:
+        smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
+    except Exception:
+        smiles = ""
     return set(smiles)
 
 

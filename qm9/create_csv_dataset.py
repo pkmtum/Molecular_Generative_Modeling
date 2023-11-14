@@ -27,7 +27,7 @@ def read_xyz_file(filename, csv_writer, max_heavy, property_index_list):
     smiles = lines[atom_count + 3].split()[1]
 
     try:
-        Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
+        smiles = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=True, canonical=True)
     except Exception:
         print(f"Discarding smiles: {smiles}")
         return False
