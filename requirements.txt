@@ -5,4 +5,5 @@ torch_geometric==2.4.0
 tensorboard==2.15.1
 jupyter
 tqdm
+torchmetrics==1.2.0
 # python 3.11

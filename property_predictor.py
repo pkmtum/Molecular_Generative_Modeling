@@ -61,7 +61,8 @@ def run_training(model, optimizer, train_dataset, val_dataset, batch_size, devic
 
         epoch_train_loss /= len(train_loader)
 
-        #model.eval()
+        # Validation
+        model.eval()
         epoch_val_loss = 0
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Epoch {epoch} Validation"):
