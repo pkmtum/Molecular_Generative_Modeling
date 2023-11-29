@@ -1,0 +1,7 @@
+name: idp  
+dependencies:  
+  - python=3.11
+  - pip  
+  - pip:
+    - --find-links https://download.pytorch.org/whl/torch_stable.html
+    - --requirement requirements.txt  
