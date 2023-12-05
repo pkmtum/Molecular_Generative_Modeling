@@ -162,5 +162,5 @@ cython_debug/
 *.bz2
 *.xyz
 
-data
-runs
+**/data*
+**/runs*
