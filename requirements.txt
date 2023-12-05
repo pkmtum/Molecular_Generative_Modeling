@@ -2,6 +2,7 @@ tqdm==4.66.1
 rdkit-pypi==2022.9.4
 torch==2.1.1+cu121  
 torch_geometric==2.4.0
+torchvision==0.16.1
 tensorboard==2.15.1
 jupyter
 tqdm
