@@ -115,9 +115,6 @@ def molecule_graph_data_to_image(data: Data) -> torch.tensor:
     # Convert to a standard RDKit mol object
     mol = mol.GetMol()
 
-    smiles = Chem.MolToSmiles(mol, isomericSmiles=False)
-    return smiles_to_image(smiles=smiles)
-
     # Remove hydrogen atoms for visualization
     mol = Chem.RemoveHs(mol)
 
