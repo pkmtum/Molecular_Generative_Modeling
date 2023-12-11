@@ -1,11 +1,13 @@
 from typing import List, Union, Tuple
 import os
+import math
 
 import torch
 from torch.utils.data import random_split
 from torch_geometric.transforms import BaseTransform
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.data import Dataset
+from torch_geometric.loader import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from rdkit import Chem
@@ -131,3 +133,17 @@ def create_tensorboard_writer(experiment_name: str, log_dir_root: str = "./tb_lo
     os.makedirs(logdir, exist_ok=True)
     experiment_index = len(os.listdir(logdir))
     return SummaryWriter(os.path.join(logdir, str(experiment_index).zfill(3)))
+
+
+def create_validation_subset_loaders(validation_dataset, subset_count, batch_size):
+    """ Create random subsets of the validation set for fast validation. """
+    validation_subsets = []
+    generator = torch.manual_seed(420)
+    validation_indices = torch.randperm(len(validation_dataset), generator=generator).tolist()
+    subset_size = math.ceil(len(validation_dataset) / subset_count)
+    for i in range(subset_count):
+        start_index = subset_size * i
+        end_index = min(subset_size * (i + 1), len(validation_dataset))
+        val_subset = torch.utils.data.Subset(validation_dataset, validation_indices[start_index:end_index])
+        validation_subsets.append(DataLoader(val_subset, batch_size=batch_size, shuffle=False))
+    return validation_subsets
