@@ -86,7 +86,6 @@ def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
 
 def smiles_to_image(smiles: str) -> torch.tensor:
     mol = Chem.MolFromSmiles(smiles)
-    smiles = Chem.M
     image = Draw.MolToImage(mol)
     image = np.array(image)
     # Convert to CHW format
@@ -137,7 +136,7 @@ def molecule_graph_data_to_image(data: Data) -> torch.tensor:
     mol = mol.GetMol()
 
     # Remove hydrogen atoms for visualization
-    mol = Chem.RemoveHs(mol)
+    mol = Chem.RemoveHs(mol, sanitize=False)
 
     image = Draw.MolToImage(mol)
     image = np.array(image)
