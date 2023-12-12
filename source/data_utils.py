@@ -5,9 +5,9 @@ import math
 import torch
 from torch.utils.data import random_split
 from torch_geometric.transforms import BaseTransform
-from torch_geometric.data import Data, HeteroData
-from torch_geometric.data import Dataset
+from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
+from torch_geometric.utils import to_dense_adj, add_self_loops
 from torch.utils.tensorboard import SummaryWriter
 
 from rdkit import Chem
@@ -55,6 +55,25 @@ class SelectQM9NodeFeatures(BaseTransform):
         data: Union[Data, HeteroData],
     ) -> Union[Data, HeteroData]:
         data.x = data.x[:, self.indices]
+        return data
+    
+class AddAdjacencyMatrix(BaseTransform):
+    """ 
+    Create the upper triangular part of the adjacency matrix from the edge_index.
+    The result is stored in the adj_triu_mat attribute.
+    """
+
+    def __init__(self, max_num_nodes: int) -> None:
+        self.max_num_nodes = max_num_nodes
+        self.triu_mask = torch.ones(max_num_nodes, max_num_nodes).triu() == 1
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        edge_index_with_loops, _ = add_self_loops(edge_index=data.edge_index)
+        adj_mat = to_dense_adj(edge_index=edge_index_with_loops, max_num_nodes=self.max_num_nodes)
+        data.adj_triu_mat = adj_mat[:, self.triu_mask]
         return data
 
 def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
