@@ -75,6 +75,38 @@ class AddAdjacencyMatrix(BaseTransform):
         adj_mat = to_dense_adj(edge_index=edge_index_with_loops, max_num_nodes=self.max_num_nodes)
         data.adj_triu_mat = adj_mat[:, self.triu_mask]
         return data
+    
+def remove_nodes(data, nodes_to_remove):
+    # Convert to set for faster lookup
+    nodes_to_remove = set(nodes_to_remove)
+
+    # Filter out edges connected to nodes to be removed
+    mask = ~torch.tensor([data.edge_index[0][i].item() in nodes_to_remove or 
+                          data.edge_index[1][i].item() in nodes_to_remove 
+                          for i in range(data.edge_index.size(1))])
+
+    new_edge_index = data.edge_index[:, mask]
+
+    # Create a mapping for new node indices
+    node_mapping = {}
+    new_index = 0
+    for old_index in range(data.num_nodes):
+        if old_index not in nodes_to_remove:
+            node_mapping[old_index] = new_index
+            new_index += 1
+
+    # Update edge indices to reflect new node indices
+    for i in range(new_edge_index.size(1)):
+        new_edge_index[0][i] = node_mapping[new_edge_index[0][i].item()]
+        new_edge_index[1][i] = node_mapping[new_edge_index[1][i].item()]
+
+    # Update node features
+    new_x = data.x[torch.tensor([i for i in range(data.num_nodes) if i not in nodes_to_remove])]
+
+    # Create new data object
+    new_data = Data(x=new_x, edge_index=new_edge_index)
+
+    return new_data
 
 def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
     """
@@ -93,7 +125,7 @@ def smiles_to_image(smiles: str) -> torch.tensor:
     # Add batch dimension
     return tensor.unsqueeze(0)
 
-def molecule_graph_data_to_image(data: Data) -> torch.tensor:
+def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.tensor:
     # create empty molecule
     mol = Chem.RWMol()
 
@@ -127,16 +159,16 @@ def molecule_graph_data_to_image(data: Data) -> torch.tensor:
         mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
 
     # Check if the molecule is chemically valid
-    try:
-        Chem.SanitizeMol(mol)
-    except Exception as e:
-        print(f"Chemically invalid molecule! Reason: {e}")
+    # try:
+    #     Chem.SanitizeMol(mol)
+    # except Exception as e:
+    #     print(f"Chemically invalid molecule! Reason: {e}")
     
     # Convert to a standard RDKit mol object
     mol = mol.GetMol()
 
     # Remove hydrogen atoms for visualization
-    mol = Chem.RemoveHs(mol, sanitize=False)
+    #mol = Chem.RemoveHs(mol, sanitize=False)
 
     image = Draw.MolToImage(mol)
     image = np.array(image)
