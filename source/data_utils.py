@@ -99,37 +99,25 @@ class AddNodeAttributeMatrix(BaseTransform):
 
         return data
     
-def remove_nodes(data, nodes_to_remove):
-    # Convert to set for faster lookup
-    nodes_to_remove = set(nodes_to_remove)
+class AddEdgeAttributeMatrix(BaseTransform):
+    """ 
+    Create the upper triangular part of the edge attribute matrix.
+    The matrix is padded with zeors to a shape of (max_num_nodes, max_num_nodes).
+    The result is stored in the edge_mat attribute.
+    """
 
-    # Filter out edges connected to nodes to be removed
-    mask = ~torch.tensor([data.edge_index[0][i].item() in nodes_to_remove or 
-                          data.edge_index[1][i].item() in nodes_to_remove 
-                          for i in range(data.edge_index.size(1))])
+    def __init__(self, max_num_nodes: int) -> None:
+        self.max_num_nodes = max_num_nodes
+        self.triu_mask = torch.ones(max_num_nodes, max_num_nodes).triu(diagonal=1) == 1
 
-    new_edge_index = data.edge_index[:, mask]
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        adj_mat = to_dense_adj(edge_index=data.edge_index, edge_attr=data.edge_attr, max_num_nodes=self.max_num_nodes)
+        data.edge_mat = adj_mat[:, self.triu_mask]
+        return data
 
-    # Create a mapping for new node indices
-    node_mapping = {}
-    new_index = 0
-    for old_index in range(data.num_nodes):
-        if old_index not in nodes_to_remove:
-            node_mapping[old_index] = new_index
-            new_index += 1
-
-    # Update edge indices to reflect new node indices
-    for i in range(new_edge_index.size(1)):
-        new_edge_index[0][i] = node_mapping[new_edge_index[0][i].item()]
-        new_edge_index[1][i] = node_mapping[new_edge_index[1][i].item()]
-
-    # Update node features
-    new_x = data.x[torch.tensor([i for i in range(data.num_nodes) if i not in nodes_to_remove])]
-
-    # Create new data object
-    new_data = Data(x=new_x, edge_index=new_edge_index)
-
-    return new_data
 
 def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
     """
