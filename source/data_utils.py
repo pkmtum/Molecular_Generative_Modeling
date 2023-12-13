@@ -60,6 +60,8 @@ class SelectQM9NodeFeatures(BaseTransform):
 class AddAdjacencyMatrix(BaseTransform):
     """ 
     Create the upper triangular part of the adjacency matrix from the edge_index.
+    The matrix is padded with zeors to a shape of (max_num_nodes, max_num_nodes).
+    The binary diagonal elements indicated the presence of a node.
     The result is stored in the adj_triu_mat attribute.
     """
 
@@ -74,6 +76,27 @@ class AddAdjacencyMatrix(BaseTransform):
         edge_index_with_loops, _ = add_self_loops(edge_index=data.edge_index)
         adj_mat = to_dense_adj(edge_index=edge_index_with_loops, max_num_nodes=self.max_num_nodes)
         data.adj_triu_mat = adj_mat[:, self.triu_mask]
+        return data
+    
+class AddNodeAttributeMatrix(BaseTransform):
+    """
+    Add the node attribute matrix. 
+    """
+    def __init__(self, max_num_nodes: int) -> None:
+        self.max_num_nodes = max_num_nodes
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        num_nodes_to_pad = self.max_num_nodes - data.x.shape[0]
+
+        # pad with hydrogen
+        padding_value = [1, 0, 0, 0, 0]
+
+        padding_tensor = torch.tensor([padding_value] * num_nodes_to_pad)
+        data.node_mat = torch.cat((data.x, padding_tensor), dim=0)
+
         return data
     
 def remove_nodes(data, nodes_to_remove):
