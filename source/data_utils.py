@@ -95,7 +95,7 @@ class AddNodeAttributeMatrix(BaseTransform):
         padding_value = [1, 0, 0, 0, 0]
 
         padding_tensor = torch.tensor([padding_value] * num_nodes_to_pad)
-        data.node_mat = torch.cat((data.x, padding_tensor), dim=0)
+        data.node_mat = torch.cat((data.x, padding_tensor), dim=0).unsqueeze(0)
 
         return data
     
