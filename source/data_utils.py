@@ -161,7 +161,7 @@ def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.ten
         class_index = torch.argmax(atom_features[:5]).item()
         atomic_number = class_index_to_atomic_number[class_index]
         atom = Chem.Atom(int(atomic_number))
-        mol.AddAtom(atom)  
+        mol.AddAtom(atom)
 
     # Create set of undirected bonds
     undirected_bonds = set()
@@ -191,7 +191,7 @@ def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.ten
     mol = mol.GetMol()
 
     # Remove hydrogen atoms for visualization
-    #mol = Chem.RemoveHs(mol, sanitize=False)
+    # mol = Chem.RemoveHs(mol, sanitize=False)
 
     image = Draw.MolToImage(mol)
     image = np.array(image)
