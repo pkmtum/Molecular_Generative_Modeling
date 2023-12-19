@@ -57,6 +57,33 @@ class SelectQM9NodeFeatures(BaseTransform):
         data.x = data.x[:, self.indices]
         return data
     
+class DropQM9Hydrogen(BaseTransform):
+    """ Remove hydrogen atoms and all connected bond from the molecular graph. """
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        nodes_to_remove = torch.where(data.x.argmax(dim=1) == 0)[0]
+        
+        mask = torch.ones(data.num_nodes, dtype=torch.bool)
+        mask[nodes_to_remove] = False
+
+        data.x = data.x[mask]
+        data.x = data.x[:, 1:]
+
+        # remove edge indices and attributes
+        edge_mask = torch.isin(data.edge_index, nodes_to_remove, invert=True).all(dim=0)
+        data.edge_index = data.edge_index[:, edge_mask]
+        data.edge_attr = data.edge_attr[edge_mask]
+
+        # udpate index mapping
+        index_mapping = torch.cumsum(mask, 0) - 1
+        data.edge_index = index_mapping[data.edge_index]
+
+        return data
+
+    
 class AddAdjacencyMatrix(BaseTransform):
     """ 
     Create the upper triangular part of the adjacency matrix from the edge_index.
@@ -92,7 +119,7 @@ class AddNodeAttributeMatrix(BaseTransform):
         num_nodes_to_pad = self.max_num_nodes - data.x.shape[0]
 
         # pad with hydrogen
-        padding_value = [1, 0, 0, 0, 0]
+        padding_value = [1] + [0] * (data.x.shape[1] - 1)
 
         padding_tensor = torch.tensor([padding_value] * num_nodes_to_pad)
         data.node_mat = torch.cat((data.x, padding_tensor), dim=0).unsqueeze(0)
@@ -136,17 +163,23 @@ def smiles_to_image(smiles: str) -> torch.tensor:
     # Add batch dimension
     return tensor.unsqueeze(0)
 
-def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.tensor:
+def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
     # create empty molecule
     mol = Chem.RWMol()
 
-    class_index_to_atomic_number = {
-        0: 1, 1: 6, 2: 7, 3: 8, 4: 9
-    }
+    if includes_h:
+        class_index_to_atomic_number = {
+            0: 1, 1: 6, 2: 7, 3: 8, 4: 9
+        }
+    else:
+        class_index_to_atomic_number = {
+            0: 6, 1: 7, 2: 8, 3: 9
+        }
+
     # Add atoms
     for atom_features in data.x:
         # convert the one-hot encoded atom class to the atomic number
-        class_index = torch.argmax(atom_features[:5]).item()
+        class_index = torch.argmax(atom_features).item()
         atomic_number = int(class_index_to_atomic_number[class_index])
         atom = Chem.Atom(atomic_number)
         mol.AddAtom(atom)
@@ -187,65 +220,6 @@ def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.ten
     tensor = torch.tensor(np.transpose(image, (2, 0, 1)))
     # Add batch dimension
     return tensor.unsqueeze(0)
-
-def molecule_graph_data_to_image_2(data: Data, validate: bool = True) -> torch.tensor:
-    # create empty molecule
-    mol = Chem.RWMol()
-
-    class_index_to_atomic_number = {
-        0: 1, 1: 6, 2: 7, 3: 8, 4: 9
-    }
-
-    # Mapping of original atom indices to new atom indices in the molecule
-    atom_index_mapping = {}
-    new_atom_index = 0
-    for original_atom_index, atom_features in enumerate(data.x):
-        class_index = torch.argmax(atom_features[:5]).item()
-        atomic_number = int(class_index_to_atomic_number[class_index])
-
-        if atomic_number != 1:  # Skip hydrogen atoms
-            atom = Chem.Atom(atomic_number)
-            mol.AddAtom(atom)
-            atom_index_mapping[original_atom_index] = new_atom_index
-            new_atom_index += 1
-        else:
-            print("Skippidy")
-
-    print(f"Atom count = {new_atom_index}")
-
-    # Add atoms, skipping hydrogen atoms
-    undirected_bonds = set()
-    for edge_indices, edge_feature in zip(data.edge_index.t(), data.edge_attr):
-        start_atom, end_atom = edge_indices
-        if start_atom.item() in atom_index_mapping and end_atom.item() in atom_index_mapping:
-            new_start_atom = atom_index_mapping[start_atom.item()]
-            new_end_atom = atom_index_mapping[end_atom.item()]
-            bond_type_index = torch.argmax(edge_feature).item()
-            bond = tuple(sorted((new_start_atom, new_end_atom)) + [bond_type_index])
-            undirected_bonds.add(bond)
-
-    bond_type_map = {
-        0: Chem.BondType.SINGLE,
-        1: Chem.BondType.DOUBLE,
-        2: Chem.BondType.TRIPLE,
-        3: Chem.BondType.AROMATIC
-    }
-    # Add bonds
-    for start_atom, end_atom, bond_type_index in undirected_bonds:
-        mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
-
-    # Convert to a standard RDKit mol object
-    mol = mol.GetMol()
-
-    print(mol.GetNumAtoms())
-
-    image = Draw.MolToImage(mol)
-    image = np.array(image)
-    # Convert to CHW format
-    tensor = torch.tensor(np.transpose(image, (2, 0, 1)))
-    # Add batch dimension
-    return tensor.unsqueeze(0)
-
 
 def create_tensorboard_writer(experiment_name: str, log_dir_root: str = "./tb_logs"):
     logdir = os.path.join(log_dir_root, experiment_name)
