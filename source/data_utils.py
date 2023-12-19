@@ -147,8 +147,8 @@ def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.ten
     for atom_features in data.x:
         # convert the one-hot encoded atom class to the atomic number
         class_index = torch.argmax(atom_features[:5]).item()
-        atomic_number = class_index_to_atomic_number[class_index]
-        atom = Chem.Atom(int(atomic_number))
+        atomic_number = int(class_index_to_atomic_number[class_index])
+        atom = Chem.Atom(atomic_number)
         mol.AddAtom(atom)
 
     # Create set of undirected bonds
@@ -180,6 +180,64 @@ def molecule_graph_data_to_image(data: Data, validate: bool = True) -> torch.ten
 
     # Remove hydrogen atoms for visualization
     # mol = Chem.RemoveHs(mol, sanitize=False)
+
+    image = Draw.MolToImage(mol)
+    image = np.array(image)
+    # Convert to CHW format
+    tensor = torch.tensor(np.transpose(image, (2, 0, 1)))
+    # Add batch dimension
+    return tensor.unsqueeze(0)
+
+def molecule_graph_data_to_image_2(data: Data, validate: bool = True) -> torch.tensor:
+    # create empty molecule
+    mol = Chem.RWMol()
+
+    class_index_to_atomic_number = {
+        0: 1, 1: 6, 2: 7, 3: 8, 4: 9
+    }
+
+    # Mapping of original atom indices to new atom indices in the molecule
+    atom_index_mapping = {}
+    new_atom_index = 0
+    for original_atom_index, atom_features in enumerate(data.x):
+        class_index = torch.argmax(atom_features[:5]).item()
+        atomic_number = int(class_index_to_atomic_number[class_index])
+
+        if atomic_number != 1:  # Skip hydrogen atoms
+            atom = Chem.Atom(atomic_number)
+            mol.AddAtom(atom)
+            atom_index_mapping[original_atom_index] = new_atom_index
+            new_atom_index += 1
+        else:
+            print("Skippidy")
+
+    print(f"Atom count = {new_atom_index}")
+
+    # Add atoms, skipping hydrogen atoms
+    undirected_bonds = set()
+    for edge_indices, edge_feature in zip(data.edge_index.t(), data.edge_attr):
+        start_atom, end_atom = edge_indices
+        if start_atom.item() in atom_index_mapping and end_atom.item() in atom_index_mapping:
+            new_start_atom = atom_index_mapping[start_atom.item()]
+            new_end_atom = atom_index_mapping[end_atom.item()]
+            bond_type_index = torch.argmax(edge_feature).item()
+            bond = tuple(sorted((new_start_atom, new_end_atom)) + [bond_type_index])
+            undirected_bonds.add(bond)
+
+    bond_type_map = {
+        0: Chem.BondType.SINGLE,
+        1: Chem.BondType.DOUBLE,
+        2: Chem.BondType.TRIPLE,
+        3: Chem.BondType.AROMATIC
+    }
+    # Add bonds
+    for start_atom, end_atom, bond_type_index in undirected_bonds:
+        mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
+
+    # Convert to a standard RDKit mol object
+    mol = mol.GetMol()
+
+    print(mol.GetNumAtoms())
 
     image = Draw.MolToImage(mol)
     image = np.array(image)
