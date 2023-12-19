@@ -115,7 +115,7 @@ class AddEdgeAttributeMatrix(BaseTransform):
         data: Union[Data, HeteroData],
     ) -> Union[Data, HeteroData]:
         adj_mat = to_dense_adj(edge_index=data.edge_index, edge_attr=data.edge_attr, max_num_nodes=self.max_num_nodes)
-        data.edge_mat = adj_mat[:, self.triu_mask]
+        data.edge_triu_mat = adj_mat[:, self.triu_mask]
         return data
 
 
