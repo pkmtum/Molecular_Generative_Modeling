@@ -168,22 +168,25 @@ class GraphVAE(nn.Module):
         
         return adjacency_loss + node_feature_loss + edge_feature_loss
     
-    def negative_elbo(self, x: Data):
+    
+    def negative_elbo(self, x: Data, w=1):
         mu, log_sigma = self.encoder(x)
         z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
 
         x_recon = self.decoder(z)
         x_target = (x.adj_triu_mat, x.node_mat, x.edge_triu_mat)
-        return (
-            self._reconstruction_loss(input=x_recon, target=x_target) 
-            + self._kl_divergence(mu=mu, log_sigma=log_sigma) * self.kl_weight
-        )
+        recon_loss = self._reconstruction_loss(input=x_recon, target=x_target)
+        kl_div = self._kl_divergence(mu=mu, log_sigma=log_sigma)
+        elbo = recon_loss + kl_div * self.kl_weight
+        return elbo, recon_loss, kl_div * self.kl_weight
     
+
     def sample(self, num_samples: int, device: str):
         z = torch.randn((num_samples, self.latent_dim), device=device)
         x = self.decoder(z)
         return z, x
     
+
     def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> Data:
         # TODO: handle batches
         pred_adj_triu_mat = x[0][0]

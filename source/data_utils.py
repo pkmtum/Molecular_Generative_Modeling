@@ -154,8 +154,7 @@ def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
     return random_split(dataset=dataset, lengths=[0.8, 0.1, 0.1], generator=generator)
 
 
-def smiles_to_image(smiles: str) -> torch.tensor:
-    mol = Chem.MolFromSmiles(smiles)
+def mol_to_image_tensor(mol) -> torch.Tensor:
     image = Draw.MolToImage(mol)
     image = np.array(image)
     # Convert to CHW format
@@ -163,8 +162,11 @@ def smiles_to_image(smiles: str) -> torch.tensor:
     # Add batch dimension
     return tensor.unsqueeze(0)
 
+def smiles_to_image(smiles: str) -> torch.tensor:
+    mol = Chem.MolFromSmiles(smiles)
+    return mol_to_image_tensor(mol=mol)
 
-def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
+def graph_to_mol(data: Data, includes_h: bool, validate: bool):
     # create empty molecule
     mol = Chem.RWMol()
 
@@ -203,24 +205,17 @@ def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
     for start_atom, end_atom, bond_type_index in undirected_bonds:
         mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
 
-    # Check if the molecule is chemically valid
-    # try:
-    #     Chem.SanitizeMol(mol)
-    # except Exception as e:
-    #     print(f"Chemically invalid molecule! Reason: {e}")
+    if validate:
+        # Check if the molecule is chemically valid
+        Chem.SanitizeMol(mol)
     
     # Convert to a standard RDKit mol object
     mol = mol.GetMol()
+    return mol
 
-    # Remove hydrogen atoms for visualization
-    # mol = Chem.RemoveHs(mol, sanitize=False)
-
-    image = Draw.MolToImage(mol)
-    image = np.array(image)
-    # Convert to CHW format
-    tensor = torch.tensor(np.transpose(image, (2, 0, 1)))
-    # Add batch dimension
-    return tensor.unsqueeze(0)
+def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
+    mol = graph_to_mol(data=data, includes_h=includes_h, validate=False)
+    return mol_to_image_tensor(mol)
 
 def create_tensorboard_writer(experiment_name: str, log_dir_root: str = "./tb_logs"):
     logdir = os.path.join(log_dir_root, experiment_name)
