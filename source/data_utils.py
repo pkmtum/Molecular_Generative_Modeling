@@ -163,6 +163,7 @@ def smiles_to_image(smiles: str) -> torch.tensor:
     # Add batch dimension
     return tensor.unsqueeze(0)
 
+
 def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
     # create empty molecule
     mol = Chem.RWMol()
