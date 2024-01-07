@@ -224,7 +224,7 @@ def create_tensorboard_writer(experiment_name: str, log_dir_root: str = "./tb_lo
     return SummaryWriter(os.path.join(logdir, str(experiment_index).zfill(3)))
 
 
-def create_validation_subset_loaders(validation_dataset, subset_count, batch_size):
+def create_validation_subset_loaders(validation_dataset, subset_count, batch_size) -> List[DataLoader]:
     """ Create random subsets of the validation set for fast validation. """
     validation_subsets = []
     generator = torch.manual_seed(420)

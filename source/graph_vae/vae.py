@@ -5,94 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.utils import dense_to_sparse, remove_self_loops
 
-class GraphAttentionPooling(nn.Module):
-
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, x):
-        # TODO:
-        return x
-
-class Encoder(nn.Module):
-
-    def __init__(self, hparams: Dict[str, Any]) -> None:
-        super().__init__()
-
-        self.latent_dim = hparams["latent_dim"]
-
-        # TODO: two graph convolutional layers (32 and 64 channels) with identity connection (edge conditioned graph convolution)
-        self.conv1 = GCNConv(in_channels=hparams["num_node_features"], out_channels=32)
-        self.conv2 = GCNConv(in_channels=32, out_channels=64)
-
-        self.fc1 = nn.Linear(in_features=64, out_features=128)
-        # output 2 time the size of the latent vector
-        # one half contains mu and the other half log(sigma)
-        self.fc2 = nn.Linear(in_features=128, out_features=self.latent_dim * 2)
-
-
-    def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
-        x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
-
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = global_mean_pool(x, batch)
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.fc2(x)
-
-        mu = x[:, :self.latent_dim]
-        log_sigma = x[:, self.latent_dim:]
-        return mu, log_sigma
-    
-class Decoder(nn.Module):
-
-    def __init__(self, hparams: Dict[str, Any]) -> None:
-        super().__init__()
-
-        self.fcls = nn.Sequential(
-            nn.Linear(in_features=hparams["latent_dim"], out_features=128),
-            nn.BatchNorm1d(num_features=128),
-            nn.ReLU(),
-            nn.Linear(in_features=128, out_features=256),
-            nn.BatchNorm1d(num_features=256),
-            nn.ReLU(),
-            nn.Linear(in_features=256, out_features=512),
-            nn.BatchNorm1d(num_features=512),
-            nn.ReLU(),
-        )
-
-        self.max_num_nodes = hparams["max_num_nodes"]
-        self.num_node_features = hparams["num_node_features"]
-
-        # the atom graph is symmetric so we only predict the upper triangular part
-        # and the diagonal that indicates the presence of nodes
-        upper_triangular_diag_size = int(self.max_num_nodes * (self.max_num_nodes + 1) / 2)
-        self.fc_adjacency = nn.Linear(in_features=512, out_features=upper_triangular_diag_size)
-
-        self.fc_node_features = nn.Linear(in_features=512, out_features=self.max_num_nodes * self.num_node_features)
-
-        self.max_num_edges = int(self.max_num_nodes * (self.max_num_nodes - 1) / 2)
-        self.num_edge_features = hparams["num_edge_features"]
-        self.fc_edge_features = nn.Linear(in_features=512, out_features=self.max_num_edges * self.num_edge_features)
-        
-
-    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = self.fcls(z)
-        # predict upper triangular matrix including the diagonal
-        adj_triu_mat = self.fc_adjacency(x)
-        node_features = self.fc_node_features(x)
-        edge_features = self.fc_edge_features(x)
-
-        # reshape matrices
-        node_mat = node_features.view(-1, self.max_num_nodes, self.num_node_features)
-        edge_triu_mat = edge_features.view(-1, self.max_num_edges, self.num_edge_features)
-
-        return adj_triu_mat, node_mat, edge_triu_mat
+from .encoder import Encoder
+from .decoder import Decoder
 
 
 class GraphVAE(nn.Module):
@@ -169,7 +85,7 @@ class GraphVAE(nn.Module):
         return adjacency_loss + node_feature_loss + edge_feature_loss
     
     
-    def negative_elbo(self, x: Data, w=1):
+    def elbo(self, x: Data):
         mu, log_sigma = self.encoder(x)
         z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
 
@@ -177,8 +93,8 @@ class GraphVAE(nn.Module):
         x_target = (x.adj_triu_mat, x.node_mat, x.edge_triu_mat)
         recon_loss = self._reconstruction_loss(input=x_recon, target=x_target)
         kl_div = self._kl_divergence(mu=mu, log_sigma=log_sigma)
-        elbo = recon_loss + kl_div * self.kl_weight
-        return elbo, recon_loss, kl_div * self.kl_weight
+        elbo = -(recon_loss + kl_div * self.kl_weight)
+        return elbo, recon_loss
     
 
     def sample(self, num_samples: int, device: str):
