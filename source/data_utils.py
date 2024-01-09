@@ -163,6 +163,16 @@ class DropAttributes(BaseTransform):
         return data
 
 
+def qm9_pre_filter(data: Data) -> bool:
+    """ Filter samples whose graphs cannot be converted to chemically valid molecules with RDKit """
+    try:
+        graph_to_mol(data, includes_h=True, validate=True)
+    except Exception as e:
+        # print(e)
+        return False
+    return True
+
+
 def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
     """
     Create a training, validation and test set from the full QM9 dataset.
