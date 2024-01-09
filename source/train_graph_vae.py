@@ -141,7 +141,7 @@ def train_model(
 
 def evaluate_model(
         graph_vae_model: GraphVAE,
-        hparams: Dict[str, Any],
+        hparams: Dict[str, Union[bool, int, float]],
         device: str,
         train_loader: DataLoader,
         val_loader: DataLoader,
@@ -192,12 +192,15 @@ def evaluate_model(
         try:
             mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=True)
             num_valid_mols += 1
+            smiles = Chem.MolToSmiles(mol)
+            if smiles in generated_mol_smiles:
+                continue
+            tb_writer.add_image('Generated', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
             generated_mol_smiles.add(Chem.MolToSmiles(mol))
         except Exception as e:
             # print(f"Invalid molecule: {e}")
-            mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=False)
-        
-        tb_writer.add_image('Generated', mol_to_image_tensor(mol=mol), global_step=i, dataformats="NCHW")
+            # mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=False)
+            pass
 
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)
@@ -221,6 +224,8 @@ def main():
     parser.add_argument("--train_sample_limit", type=int, help="Maximum number of training samples to use. If unspecified, the full training set is used.")
     parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
+    parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
+    parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the Kullback-Leibler divergence in the loss term.")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -251,8 +256,8 @@ def main():
         "epochs": args.epochs,
         "num_node_features": dataset.num_node_features,
         "num_edge_features": dataset.num_edge_features,
-        "latent_dim": 128,  # c in the paper
-        "kl_weight": 1e-2,
+        "latent_dim": args.latent_dim,  # c in the paper
+        "kl_weight": args.kl_weight,
         "include_hydrogen": args.include_hydrogen,
     }
 
