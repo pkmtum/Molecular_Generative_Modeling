@@ -146,6 +146,23 @@ class AddEdgeAttributeMatrix(BaseTransform):
         return data
 
 
+class DropAttributes(BaseTransform):
+    """ 
+    Delete given attribute from each sample to save memory
+    """
+
+    def __init__(self, attributes: List[str]) -> None:
+        self.attributes = attributes
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        for attr in self.attributes:
+            delattr(data, attr)
+        return data
+
+
 def create_qm9_data_split(dataset) -> Tuple[Dataset, Dataset, Dataset]:
     """
     Create a training, validation and test set from the full QM9 dataset.
@@ -182,7 +199,7 @@ def graph_to_mol(data: Data, includes_h: bool, validate: bool):
     # Add atoms
     for atom_features in data.x:
         # convert the one-hot encoded atom class to the atomic number
-        class_index = torch.argmax(atom_features).item()
+        class_index = torch.argmax(atom_features[:5]).item()
         atomic_number = int(class_index_to_atomic_number[class_index])
         atom = Chem.Atom(atomic_number)
         mol.AddAtom(atom)
