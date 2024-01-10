@@ -78,7 +78,7 @@ class Encoder(nn.Module):
         self.conv_1 = GCNConv(in_channels=hparams["num_node_features"], out_channels=32)
         self.batch_norm_1 = BatchNorm(in_channels=32)
         self.conv_2 = GCNConv(in_channels=32, out_channels=64)
-        #self.batch_norm_2 = BatchNorm(in_channels=64)
+        self.batch_norm_2 = BatchNorm(in_channels=64)
 
         self.fc_1 = nn.Linear(in_features=64, out_features=128)
         # output 2 time the size of the latent vector
@@ -89,12 +89,14 @@ class Encoder(nn.Module):
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
         x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
 
-        tmp = self.ecc_conv(x, edge_index, edge_attr)
+        # tmp = self.ecc_conv(x, edge_index, edge_attr)
 
         x = self.conv_1(x, edge_index)
         x = self.batch_norm_1(x)
         x = F.relu(x)
         x = self.conv_2(x, edge_index) 
+        x = self.batch_norm_2(x)
+        x = F.relu(x)
 
         x = global_mean_pool(x, batch)
         x = self.fc_1(x)
