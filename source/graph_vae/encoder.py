@@ -7,18 +7,20 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, global_mean_pool, BatchNorm
 from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.utils import degree
 
 class ECCConv(MessagePassing):
     r""" The graph convolution operator from the 
     `"Dynamic Edge-Conditioned Filters in Convolutional Neural Networks on Graphs"
     <https://arxiv.org/abs/1609.02907>`_ paper """
     
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels: int, out_channels: int):
         super().__init__(aggr='add')
 
     def forward(self, x, ) -> Any:
         # TODO
         pass
+
 
 class GraphAttentionPooling(nn.Module):
 

@@ -3,6 +3,7 @@ import datetime
 import os
 import shutil
 import argparse
+import json
 from typing import Dict, Any, Union
 
 from tqdm import tqdm
@@ -74,6 +75,7 @@ def create_dataloaders(
 def train_model(
         graph_vae_model: GraphVAE,
         optimizer: torch.optim.Optimizer,
+        hparams: Dict[str, Union[bool, int, float]],
         train_loader: DataLoader,
         val_subset_loaders: List[DataLoader],
         tb_writer: SummaryWriter,
@@ -129,9 +131,10 @@ def train_model(
                 graph_vae_model.train()
 
         torch.save({
-                'epoch': epoch,
-                'model_state_dict': graph_vae_model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                "epoch": epoch,
+                "model_state_dict": graph_vae_model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "hparams": hparams,
             },
             out_checkpoint
         )
@@ -160,7 +163,7 @@ def evaluate_model(
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
-    for val_batch in tqdm(val_loader, desc="Evaluating Reconstruction Performance..."):
+    for val_batch in tqdm(val_loader, desc="Evaluating Reconstruction Performance"):
         val_elbo, val_recon_loss = graph_vae_model.elbo(x=val_batch)
         val_elbo_sum += val_elbo
         val_log_likelihood_sum -= val_recon_loss
@@ -174,18 +177,28 @@ def evaluate_model(
     # decoding quality metrics
     train_mol_smiles = set()
     include_hydrogen = hparams["include_hydrogen"]
-    for batch in tqdm(train_loader, desc="Converting training graphs to SMILES..."):
-        for sample_index in range(len(batch)):
-            sample = batch[sample_index]
-            mol = graph_to_mol(data=sample, includes_h=include_hydrogen, validate=False)
-            train_mol_smiles.add(Chem.MolToSmiles(mol))
+
+    smiles_file_path = "./data/qm9_train_smiles.json"
+    try:
+        with open(smiles_file_path, "r") as file:
+            train_mol_smiles = set(json.load(file))
+    except FileNotFoundError:
+        for batch in tqdm(train_loader, desc="Converting training graphs to SMILES"):
+            for sample_index in range(len(batch)):
+                sample = batch[sample_index]
+                mol = graph_to_mol(data=sample, includes_h=include_hydrogen, validate=False)
+                train_mol_smiles.add(Chem.MolToSmiles(mol))
+
+        # write SMILES strings to the json file so can just load them the next time
+        with open(smiles_file_path, "w") as file:
+            json.dump(list(train_mol_smiles), file)
 
     num_samples = 1000
     num_valid_mols = 0
 
     generated_mol_smiles = set()
     z, x = graph_vae_model.sample(num_samples=num_samples, device=device)
-    for i in tqdm(range(num_samples), "Generating Molecules..."):
+    for i in tqdm(range(num_samples), "Generating Molecules"):
         sample_matrices = (x[0][i:i+1], x[1][i:i+1], x[2][i:i+1])
         sample_graph = graph_vae_model.output_to_graph(x=sample_matrices)
         
@@ -226,6 +239,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
     parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the Kullback-Leibler divergence in the loss term.")
+    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -251,7 +265,7 @@ def main():
         "batch_size": args.batch_size,
         "train_sample_limit": args.train_sample_limit,
         "max_num_nodes": 29 if args.include_hydrogen else 9,
-        "learning_rate": 1e-3,
+        "learning_rate": args.learning_rate,
         "adam_beta_1": 0.5,
         "epochs": args.epochs,
         "num_node_features": dataset.num_node_features,
@@ -285,6 +299,7 @@ def main():
     out_checkpoint_path = train_model(
         graph_vae_model=graph_vae_model,
         optimizer=optimizer,
+        hparams=hparams,
         train_loader=data_loaders["train"],
         val_subset_loaders=data_loaders["val_subsets"],
         tb_writer=tb_writer,

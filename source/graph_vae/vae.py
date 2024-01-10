@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Tuple, Any, Dict, List
 
 import torch
@@ -28,6 +29,13 @@ class GraphVAE(nn.Module):
         self.diag_triu_mask = rows == cols
 
         self.edge_triu_rows, self.edge_triu_cols = torch.triu_indices(self.max_num_nodes, self.max_num_nodes, offset=1)
+
+    @staticmethod
+    def from_pretrained(checkpoint_path: str) -> GraphVAE:
+        checkpoint = torch.load(checkpoint_path)
+        graph_vae_model = GraphVAE(hparams=checkpoint["hparams"])
+        graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
+        return graph_vae_model
 
     def _sample_with_reparameterization(self, mu: torch.Tensor, log_sigma: torch.Tensor) -> torch.Tensor:
         sigma = torch.exp(log_sigma)
@@ -83,6 +91,12 @@ class GraphVAE(nn.Module):
         edge_feature_loss = (per_edge_feature_loss * edge_mask).sum() / edge_mask.sum()
         
         return adjacency_loss + node_feature_loss + edge_feature_loss
+    
+
+    def encode(self, x: Data):
+        mu, log_sigma = self.encoder(x)
+        z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
+        return z
     
     
     def elbo(self, x: Data):
@@ -148,3 +162,4 @@ class GraphVAE(nn.Module):
         x = F.one_hot(pred_node_mat[node_mask].argmax(dim=1), num_classes=self.num_node_features)
 
         return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    
