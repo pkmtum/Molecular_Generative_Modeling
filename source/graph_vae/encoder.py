@@ -23,7 +23,7 @@ class ECCConv(MessagePassing):
         self.out_channels = out_channels
         self.edge_fc = Linear(num_edge_features, in_channels * out_channels, bias=False)
         self.bias = Parameter(torch.empty(out_channels))
-        self.res_fc = Linear(in_channels, out_channels, bias=False)
+        self.res_fc = Linear(in_channels, out_channels)
 
         self.reset_parameters()
 
