@@ -31,6 +31,7 @@ class ECCConv(MessagePassing):
     def reset_parameters(self):
         self.edge_fc.reset_parameters()
         self.bias.data.zero_()
+        self.res_fc.reset_parameters()
 
     def forward(self, x, edge_index, edge_attr):
         theta = self.edge_fc(edge_attr)
