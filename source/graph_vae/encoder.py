@@ -14,14 +14,14 @@ from torch_geometric.utils import degree
 class ECCConv(MessagePassing):
     r""" The graph convolution operator from the 
     `"Dynamic Edge-Conditioned Filters in Convolutional Neural Networks on Graphs"
-    <https://arxiv.org/abs/1609.02907>`_ paper """
+    <https://arxiv.org/abs/1704.02901>`_ paper """
     
     def __init__(self, num_edge_features: int, in_channels: int, out_channels: int):
         super().__init__(aggr='add')
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.edge_fc = Linear(num_edge_features, in_channels * out_channels, bias=False)
+        self.edge_fc = Linear(num_edge_features, in_channels * out_channels)
         self.bias = Parameter(torch.empty(out_channels))
         self.res_fc = Linear(in_channels, out_channels)
 
