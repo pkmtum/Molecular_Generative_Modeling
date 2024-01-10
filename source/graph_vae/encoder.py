@@ -23,6 +23,7 @@ class ECCConv(MessagePassing):
         self.out_channels = out_channels
         self.edge_fc = Linear(num_edge_features, in_channels * out_channels, bias=False)
         self.bias = Parameter(torch.empty(out_channels))
+        self.res_fc = Linear(in_channels, out_channels, bias=False)
 
         self.reset_parameters()
 
@@ -40,9 +41,14 @@ class ECCConv(MessagePassing):
         deg_rcp[deg_rcp == float("inf")] = 0
         norm = deg_rcp.unsqueeze(-1)
         
+        # message passing
         out = self.propagate(edge_index, x=x, norm=norm, theta=theta)
 
+        # add bias
         out += self.bias
+
+        # identity connection
+        out += self.res_fc(x)
 
         return out
 
@@ -89,7 +95,7 @@ class Encoder(nn.Module):
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
         x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
 
-        # tmp = self.ecc_conv(x, edge_index, edge_attr)
+        tmp = self.ecc_conv(x, edge_index, edge_attr)
 
         x = self.conv_1(x, edge_index)
         x = self.batch_norm_1(x)
