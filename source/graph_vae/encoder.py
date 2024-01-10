@@ -1,14 +1,15 @@
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear, Parameter
 
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv, global_mean_pool, BatchNorm, EdgeConv
+from torch_geometric.nn import BatchNorm
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import degree
+from torch_geometric.utils import degree, scatter
 
 
 class ECCConv(MessagePassing):
@@ -57,13 +58,31 @@ class ECCConv(MessagePassing):
 
 
 class GlobalGraphPooling(nn.Module):
+    r""" Graph-level output from equation 7 in the
+    `"Gated Graph Sequence Neural Networks"
+    <https://arxiv.org/abs/1511.05493>`_ paper
+    """
 
-    def __init__(self) -> None:
+    def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
 
-    def forward(self, x, edge_index, edge_attr):
-        # TODO:
-        return x
+        self.fc_i = Linear(in_channels, out_channels)
+        self.fc_j = Linear(in_channels, out_channels)
+
+    def forward(self, x: Tensor, batch: Optional[Tensor]) -> Tensor:
+        attention_weights = F.sigmoid(self.fc_i(x))
+        node_features = F.tanh(self.fc_j(x))
+
+        out = attention_weights * node_features
+
+        # sum all node features within a graph
+        dim = -1 if isinstance(x, Tensor) and x.dim() == 1 else -2
+        if batch is None:
+            out = out.mean(dim=dim, keepdim=x.dim() <= 2)
+        else:
+            out = scatter(out, batch, dim=dim, reduce='sum')
+        
+        return F.tanh(out)
 
 
 class Encoder(nn.Module):
@@ -86,10 +105,11 @@ class Encoder(nn.Module):
         )
         self.batch_norm_2 = BatchNorm(in_channels=64)
 
-        self.fc_1 = nn.Linear(in_features=64, out_features=128)
+        self.graph_pooling = GlobalGraphPooling(in_channels=64, out_channels=128)
+
         # output 2 time the size of the latent vector
         # one half contains mu and the other half log(sigma)
-        self.fc_2 = nn.Linear(in_features=128, out_features=self.latent_dim * 2)
+        self.fc = nn.Linear(in_features=128, out_features=self.latent_dim * 2)
 
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -102,10 +122,9 @@ class Encoder(nn.Module):
         x = self.batch_norm_2(x)
         x = F.relu(x)
 
-        x = global_mean_pool(x, batch)
-        x = self.fc_1(x)
-        x = F.relu(x)
-        x = self.fc_2(x)
+        x = self.graph_pooling(x, batch)
+
+        x = self.fc(x)
 
         mu = x[:, :self.latent_dim]
         log_sigma = x[:, self.latent_dim:]
