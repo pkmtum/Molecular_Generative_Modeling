@@ -285,12 +285,12 @@ def main():
 
     # load checkpoint
     if args.checkpoint is not None:
-        graph_vae_model = GraphVAE.from_pretrained(args.checkpoint)
+        graph_vae_model = GraphVAE.from_pretrained(args.checkpoint).to(device)
         checkpoint = torch.load(args.checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         hparams = checkpoint["hparams"]
         start_epoch = checkpoint['epoch'] + 1
-        hparams["epochs"] += start_epoch
+        hparams["epochs"] = args.epochs + start_epoch
     else:
         start_epoch = 0
 
@@ -305,7 +305,7 @@ def main():
         train_loader=data_loaders["train"],
         val_subset_loaders=data_loaders["val_subsets"],
         tb_writer=tb_writer,
-        epochs=hparams["epochs"],
+        epochs=args.epochs,
         start_epoch=start_epoch
     )
 
