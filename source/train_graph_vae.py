@@ -92,7 +92,7 @@ def train_model(
 
     validation_interval = 100
 
-    for epoch in range(start_epoch, epochs):
+    for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
         for batch_index, train_batch in enumerate(tqdm(train_loader,  desc=f"Epoch {epoch + 1} Training")):
             optimizer.zero_grad()
@@ -285,10 +285,12 @@ def main():
 
     # load checkpoint
     if args.checkpoint is not None:
-        checkpoint = checkpoint = torch.load(args.checkpoint)
-        graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
+        graph_vae_model = GraphVAE.from_pretrained(args.checkpoint)
+        checkpoint = torch.load(args.checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        hparams = checkpoint["hparams"]
         start_epoch = checkpoint['epoch'] + 1
+        hparams["epochs"] += start_epoch
     else:
         start_epoch = 0
 
