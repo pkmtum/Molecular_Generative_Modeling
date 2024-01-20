@@ -37,26 +37,33 @@ class GraphVAE(nn.Module):
         graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
         return graph_vae_model
 
-    def _sample_with_reparameterization(self, mu: torch.Tensor, log_sigma: torch.Tensor) -> torch.Tensor:
-        sigma = torch.exp(log_sigma)
+    def _sample_with_reparameterization(self, mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         std_norm = torch.randn_like(mu)
         return std_norm * sigma + mu
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, log_sigma = self.encoder(data)
-        z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
+        mu, log_var = self.encoder(data)
+
+        log_var = torch.clamp(log_var, -30.0, 20.0)
+        sigma = torch.exp(log_var / 2)
+
+        z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
         x = self.decoder(z)
-        return x
+        return x, mu, sigma
     
-    def _kl_divergence(self, mu: torch.Tensor, log_sigma: torch.Tensor) -> torch.Tensor:
-        log_sigma_squared = log_sigma + log_sigma
-        sigma_squared = torch.exp(log_sigma_squared)
+    @staticmethod
+    def kl_divergence(mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+        sigma_squared = sigma * sigma
+        log_sigma_squared = torch.log(sigma_squared)
         mu_squared = mu * mu
-        kl_div_sample = 0.5 * torch.sum(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
+        # technically this is the correct KL-divergence
+        # but in practice it is way too high
+        # kl_div_sample = 0.5 * torch.sum(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
+        kl_div_sample = 0.5 * torch.mean(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
         # average over the batch
         return torch.mean(kl_div_sample)
     
-    def _reconstruction_loss(
+    def reconstruction_loss(
         self, 
         input: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], 
         target: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
@@ -94,22 +101,14 @@ class GraphVAE(nn.Module):
     
 
     def encode(self, x: Data):
-        mu, log_sigma = self.encoder(x)
-        z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
-        return z
-    
-    
-    def elbo(self, x: Data):
-        mu, log_sigma = self.encoder(x)
-        z = self._sample_with_reparameterization(mu=mu, log_sigma=log_sigma)
+        mu, log_var = self.encoder(x)
 
-        x_recon = self.decoder(z)
-        x_target = (x.adj_triu_mat, x.node_mat, x.edge_triu_mat)
-        recon_loss = self._reconstruction_loss(input=x_recon, target=x_target)
-        kl_div = self._kl_divergence(mu=mu, log_sigma=log_sigma)
-        elbo = -(recon_loss + kl_div * self.kl_weight)
-        return elbo, recon_loss
-    
+        log_var = torch.clamp(log_var, -30.0, 20.0)
+        sigma = torch.exp(log_var / 2)
+
+        z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
+        return z
+        
 
     def sample(self, num_samples: int, device: str):
         z = torch.randn((num_samples, self.latent_dim), device=device)

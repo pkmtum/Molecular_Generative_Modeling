@@ -5,6 +5,7 @@ import shutil
 import argparse
 import json
 from typing import Dict, Any, Union
+import math
 
 from tqdm import tqdm
 import torch
@@ -72,6 +73,20 @@ def create_dataloaders(
     return dataloaders
 
 
+def sigmoid_schedule(epoch: int, start: int, slope: float) -> float:
+    return 1 / (1 + np.exp(slope * (start - epoch)))
+
+
+def cyclic_linear_schedule(iteration: int, cycle_length: int) -> float:
+    linear_length = cycle_length // 2
+    return min(1, (iteration % cycle_length) / linear_length) 
+
+
+def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
+    cosine_length = cycle_length // 2
+    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi))
+
+
 def train_model(
         graph_vae_model: GraphVAE,
         optimizer: torch.optim.Optimizer,
@@ -92,41 +107,55 @@ def train_model(
 
     validation_interval = 100
 
+    base_kl_weight = hparams["kl_weight"]
+
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
+
         for batch_index, train_batch in enumerate(tqdm(train_loader,  desc=f"Epoch {epoch + 1} Training")):
             optimizer.zero_grad()
-            
-            train_elbo, train_recon_loss = graph_vae_model.elbo(x=train_batch)
 
-            train_loss = -train_elbo
+            iteration = len(train_loader) * epoch + batch_index
+            kl_weight = cyclic_cosine_schedule(iteration=iteration, cycle_length=10_100) * base_kl_weight
+            
+            train_recon, mu, sigma = graph_vae_model(train_batch)
+            train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
+
+            train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
+            train_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+            train_loss = train_recon_loss + kl_weight * train_kl_divergence
+
             train_loss.backward()
             optimizer.step()
 
-            iteration = len(train_loader) * epoch + batch_index
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
-            tb_writer.add_scalars("ELBO", {"Training": train_elbo.item()}, iteration)
+            tb_writer.add_scalars("ELBO", {"Training": -train_loss.item()}, iteration)
             tb_writer.add_scalars("Reconstruction Loss", {"Training": train_recon_loss.item()}, iteration)
+            tb_writer.add_scalar("KL Weight", kl_weight, iteration)
+            tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence.item()}, iteration)
             
             if (iteration + 1) % validation_interval == 0 or iteration == 0:
                 graph_vae_model.eval()
                 val_loss_sum = 0
-                val_elbo_sum = 0
 
                 # Get the next subset of the validation set
                 val_loader = next(val_subset_loader_iterator)
                 with torch.no_grad():
                     for val_batch in val_loader:
-                        val_elbo, val_recon_loss = graph_vae_model.elbo(x=val_batch)
-                        val_elbo_sum += val_elbo
-                        val_loss = -val_elbo
+                        val_recon, mu, sigma = graph_vae_model(val_batch)
+                        val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
+
+                        val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
+                        val_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+                        val_loss = val_recon_loss + kl_weight * val_kl_divergence
+
                         val_loss_sum += val_loss
                 
                 val_loss = val_loss_sum / len(val_loader)
-                val_elbo = val_elbo_sum / len(val_loader)
                 tb_writer.add_scalars("Loss", {"Validation": val_loss.item()}, iteration)
-                tb_writer.add_scalars("ELBO", {"Validation": val_elbo.item()}, iteration)
+                tb_writer.add_scalars("ELBO", {"Validation": -val_loss.item()}, iteration)
                 tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss.item()}, iteration)
+                tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence.item()}, iteration)
                 
                 graph_vae_model.train()
 
@@ -160,12 +189,19 @@ def evaluate_model(
         "Decoder Parameter Count": sum(p.numel() for p in graph_vae_model.decoder.parameters() if p.requires_grad),
     })
 
+    kl_weight = hparams["kl_weight"]
+
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
     for val_batch in tqdm(val_loader, desc="Evaluating Reconstruction Performance"):
-        val_elbo, val_recon_loss = graph_vae_model.elbo(x=val_batch)
-        val_elbo_sum += val_elbo
+        val_recon, mu, sigma = graph_vae_model(val_batch)
+        val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
+
+        val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
+        val_loss = val_recon_loss + kl_weight * GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+
+        val_elbo_sum -= val_loss
         val_log_likelihood_sum -= val_recon_loss
 
     metrics = dict()
@@ -235,10 +271,10 @@ def main():
     )
     parser.add_argument("--checkpoint", type=str, help="Checkpoint to resume training from.")
     parser.add_argument("--train_sample_limit", type=int, help="Maximum number of training samples to use. If unspecified, the full training set is used.")
-    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs.")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
-    parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the Kullback-Leibler divergence in the loss term.")
+    parser.add_argument("--kl_weight", type=float, default=1, help="Weight of the Kullback-Leibler divergence in the loss term.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     args = parser.parse_args()
 
