@@ -23,7 +23,6 @@ class GraphVAE(nn.Module):
         self.max_num_nodes = hparams["max_num_nodes"]
         self.num_node_features = hparams["num_node_features"]
         self.num_edge_features = hparams["num_edge_features"]
-        self.kl_weight = hparams["kl_weight"]
 
         rows, cols = torch.triu_indices(self.max_num_nodes, self.max_num_nodes)
         self.diag_triu_mask = rows == cols
@@ -63,6 +62,20 @@ class GraphVAE(nn.Module):
         # average over the batch
         return torch.mean(kl_div_sample)
     
+    @staticmethod
+    def pairwise_kl_divergence(tensor_p, tensor_q):
+        # Expand tensors for broadcasting
+        tensor_p_expanded = tensor_p.unsqueeze(2)
+        tensor_q_expanded = tensor_q.unsqueeze(1)
+
+        kl_div = F.kl_div(tensor_p_expanded.log(), tensor_q_expanded, reduction='none')
+        
+        # Sum over the last dimension to get the final KL divergence values
+        kl_div_summed = kl_div.sum(dim=-1)
+
+        return kl_div_summed
+
+    
     def reconstruction_loss(
         self, 
         input: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], 
@@ -70,6 +83,51 @@ class GraphVAE(nn.Module):
     ):
         input_adj_triu_mat, input_node_mat, input_edge_mat = input
         target_adj_triu_mat, target_node_mat, target_edge_mat = target
+
+        # graph matching
+        # input_node_distribution = torch.nn.Softmax(dim=2)(input_node_mat)
+        # target_node_distribution = torch.nn.Softmax(dim=2)(target_node_mat)
+
+        # kl_div_mat = self.pairwise_kl_divergence(tensor_p=input_node_distribution, tensor_q=target_node_distribution)
+
+        # assignment_matrices = []
+        # for S in kl_div_mat:
+        #     # Convert to cost matrix if necessary
+        #     cost_matrix = S.max() - S
+        #     from scipy.optimize import linear_sum_assignment
+        #     # Apply the Hungarian algorithm
+        #     row_ind, col_ind = linear_sum_assignment(cost_matrix.cpu().detach().numpy())
+
+        #     # Create the assignment matrix X
+        #     X = torch.zeros_like(cost_matrix, device=kl_div_mat.device)
+        #     X[row_ind, col_ind] = 1
+        #     # Store the result
+        #     assignment_matrices.append(X.unsqueeze(0))
+
+        # assigment_matrix = torch.cat(assignment_matrices)
+        # device = assigment_matrix.device
+
+        # # permute adjacency matrix
+        # n = self.max_num_nodes
+        # input_adj_mat = torch.zeros(input_adj_triu_mat.shape[0], n, n, device=device)
+        # triu_mask_adj = torch.ones(n, n).triu() == 1
+        # input_adj_mat[:, triu_mask_adj] = input_adj_triu_mat
+        # input_adj_mat = torch.bmm(assigment_matrix, torch.bmm(input_adj_mat, assigment_matrix.transpose(1, 2)))
+        
+        # input_adj_triu_mat = input_adj_mat[:, triu_mask_adj]
+
+        # # permute node features
+        # input_node_mat = torch.bmm(assigment_matrix.transpose(1, 2), input_node_mat)
+
+        # # permute edge features
+        # edge_mat = torch.zeros(input_edge_mat.shape[0], n, n, 4, device=device)
+        # triu_mask_edge = torch.ones(n, n).triu(diagonal=1) == 1
+        # edge_mat[:, triu_mask_edge] = input_edge_mat
+
+        # for i in range(edge_mat.shape[3]):
+        #     edge_mat[:, :, :, i] =  torch.bmm(assigment_matrix, torch.bmm(edge_mat[:, :, :, i], assigment_matrix.transpose(1, 2)))
+
+        # input_edge_mat = edge_mat[:, triu_mask_edge]
 
         # average loss over nodes and edges separately
         input_adj_triu_mat_diag = input_adj_triu_mat[:, self.diag_triu_mask]
@@ -116,7 +174,7 @@ class GraphVAE(nn.Module):
         return z, x
     
 
-    def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> Data:
+    def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], stochastic: bool) -> Data:
         # TODO: handle batches
         pred_adj_triu_mat = x[0][0]
         pred_node_mat = x[1][0]
@@ -125,13 +183,23 @@ class GraphVAE(nn.Module):
         device = pred_adj_triu_mat.device
         n = self.max_num_nodes
 
-        edge_triu_mat = pred_edge_triu_mat.argmax(dim=1).float()
+        if stochastic:
+            softmax = torch.nn.Softmax(dim=1)
+            normalized_pred_edge_triu_mat = softmax(pred_edge_triu_mat)
+            edge_triu_mat = torch.multinomial(normalized_pred_edge_triu_mat, num_samples=1)[:, 0].float()
+        else:
+            edge_triu_mat = pred_edge_triu_mat.argmax(dim=1).float()
+
         edge_mat = torch.zeros(n, n, device=device)
         edge_mat[torch.ones(n, n).triu(diagonal=1) == 1] = edge_triu_mat
         edge_mat = edge_mat + 1  # add one so we can so that 0 indicates no node instead of hydrogen
 
         # convert predicted upper triagular matrix into symmetric edge index and
-        adj_triu_mat = torch.where(F.sigmoid(pred_adj_triu_mat) > 0.5, 1.0, 0.0)
+        if stochastic:
+            adj_triu_mat = torch.bernoulli(F.sigmoid(pred_adj_triu_mat))
+        else:
+            adj_triu_mat = torch.where(F.sigmoid(pred_adj_triu_mat) > 0.5, 1.0, 0.0)
+        
         adj_mat = torch.zeros(n, n, device=device)
         adj_mat[torch.ones(n, n).triu() == 1] = adj_triu_mat
         diagonal = adj_mat.diagonal()
@@ -158,7 +226,13 @@ class GraphVAE(nn.Module):
         edge_index, edge_attr = remove_self_loops(edge_index=new_edge_index, edge_attr=new_edge_attr)
 
         # convert node feature logits into one-hot vector
-        x = F.one_hot(pred_node_mat[node_mask].argmax(dim=1), num_classes=self.num_node_features)
+        if stochastic:
+            softmax = torch.nn.Softmax(dim=1)
+            normalized_pred_node_mat = softmax(pred_node_mat[node_mask])
+            node_feature_sample = torch.multinomial(normalized_pred_node_mat, num_samples=1)[:, 0]
+        else:
+            node_feature_sample = pred_node_mat[node_mask].argmax(dim=1)
+        x = F.one_hot(node_feature_sample, num_classes=self.num_node_features)
 
         return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
     

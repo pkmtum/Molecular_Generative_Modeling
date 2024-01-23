@@ -6,18 +6,23 @@ import argparse
 import json
 from typing import Dict, Any, Union
 import math
+import functools
 
 from tqdm import tqdm
 import torch
 from torch_geometric.datasets import QM9
 import torch_geometric.transforms as T
 from torch_geometric.loader import DataLoader
+import torch_geometric.utils as pyg_utils
+
+import networkx as nx
 
 from rdkit import RDLogger
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
 from graph_vae.vae import GraphVAE
+from graph_vae.discriminator import GraphDiscriminator
 from data_utils import *
 
 
@@ -104,10 +109,19 @@ def train_model(
 
     # get dataloaders
     val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
-
     validation_interval = 100
 
-    base_kl_weight = hparams["kl_weight"]
+    discriminator = GraphDiscriminator(hparams=hparams).to("cuda")
+
+    kl_schedule_type = hparams["kl_schedule"]
+    kl_schedule_func = None
+    if kl_schedule_type == "constant":
+        kl_schedule_func = lambda x: 1
+    elif kl_schedule_type == "cyclical":
+        total_iteration_count = len(train_loader) * epochs
+        num_cycles = 4
+        cycle_length = math.ceil(total_iteration_count / num_cycles)
+        kl_schedule_func = functools.partial(cyclic_cosine_schedule, cycle_length=cycle_length)
 
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
@@ -116,7 +130,8 @@ def train_model(
             optimizer.zero_grad()
 
             iteration = len(train_loader) * epoch + batch_index
-            kl_weight = cyclic_cosine_schedule(iteration=iteration, cycle_length=10_100) * base_kl_weight
+
+            kl_weight = kl_schedule_func(iteration)
             
             train_recon, mu, sigma = graph_vae_model(train_batch)
             train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
@@ -124,6 +139,9 @@ def train_model(
             train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
             train_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
             train_loss = train_recon_loss + kl_weight * train_kl_divergence
+
+            # TODO: add adversarial loss
+            print(discriminator(train_recon).shape)
 
             train_loss.backward()
             optimizer.step()
@@ -189,7 +207,6 @@ def evaluate_model(
         "Decoder Parameter Count": sum(p.numel() for p in graph_vae_model.decoder.parameters() if p.requires_grad),
     })
 
-    kl_weight = hparams["kl_weight"]
 
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
@@ -199,7 +216,7 @@ def evaluate_model(
         val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
 
         val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-        val_loss = val_recon_loss + kl_weight * GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+        val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma)
 
         val_elbo_sum -= val_loss
         val_log_likelihood_sum -= val_recon_loss
@@ -231,31 +248,54 @@ def evaluate_model(
 
     num_samples = 1000
     num_valid_mols = 0
+    num_connected_graphs = 0
 
+    use_stochastic_decoding = hparams["stochastic_decoding"]
+    if use_stochastic_decoding:
+        max_decode_attempts = hparams["max_decode_attempts"]
+    else:
+        max_decode_attempts = 1
+
+    total_decode_attempts = 0
     generated_mol_smiles = set()
     z, x = graph_vae_model.sample(num_samples=num_samples, device=device)
     for i in tqdm(range(num_samples), "Generating Molecules"):
         sample_matrices = (x[0][i:i+1], x[1][i:i+1], x[2][i:i+1])
-        sample_graph = graph_vae_model.output_to_graph(x=sample_matrices)
+
+        # attempt to decode multiply time until we have both a connected graph and a valid molecule
+        for _ in range(max_decode_attempts):
+            sample_graph = graph_vae_model.output_to_graph(x=sample_matrices, stochastic=use_stochastic_decoding)
+            total_decode_attempts += 1
+
+            # check if the generated graph is connected
+            if nx.is_connected(pyg_utils.to_networkx(sample_graph, to_undirected=True)):
+                num_connected_graphs += 1
+            else:
+                # graph is not connected; try to decode again
+                continue
         
-        try:
-            mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=True)
+            try:
+                mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=True)
+            except Exception as e:
+                # Molecule is invalid; try to decode again
+                continue
+
+            # Molecule is valid
             num_valid_mols += 1
             smiles = Chem.MolToSmiles(mol)
-            if smiles in generated_mol_smiles:
-                continue
-            tb_writer.add_image('Generated', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
-            generated_mol_smiles.add(Chem.MolToSmiles(mol))
-        except Exception as e:
-            # print(f"Invalid molecule: {e}")
-            # mol = graph_to_mol(data=sample_graph, includes_h=include_hydrogen, validate=False)
-            pass
+            if smiles not in generated_mol_smiles:
+                tb_writer.add_image('Generated', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
+                generated_mol_smiles.add(Chem.MolToSmiles(mol))
+            break
+
 
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)
 
     metrics.update({
-        "Validity": num_valid_mols / num_samples,
+        "Mean Decode Attempts": total_decode_attempts / num_samples,
+        "Connectedness": num_connected_graphs / total_decode_attempts,
+        "Validity": num_valid_mols / total_decode_attempts,
         "Uniqueness": len(generated_mol_smiles) / num_valid_mols,
         "Novelty": novel_mol_count / len(generated_mol_smiles),  
     })
@@ -274,7 +314,9 @@ def main():
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
-    parser.add_argument("--kl_weight", type=float, default=1, help="Weight of the Kullback-Leibler divergence in the loss term.")
+    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
+    parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
+    parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     args = parser.parse_args()
 
@@ -307,8 +349,10 @@ def main():
         "num_node_features": dataset.num_node_features,
         "num_edge_features": dataset.num_edge_features,
         "latent_dim": args.latent_dim,  # c in the paper
-        "kl_weight": args.kl_weight,
+        "kl_schedule": args.kl_schedule,
         "include_hydrogen": args.include_hydrogen,
+        "stochastic_decoding": args.stochastic_decoding,
+        "max_decode_attempts": args.max_decode_attempts,
     }
 
     # setup model and optimizer
@@ -327,6 +371,8 @@ def main():
         hparams = checkpoint["hparams"]
         start_epoch = checkpoint['epoch'] + 1
         hparams["epochs"] = args.epochs + start_epoch
+        hparams["stochastic_decoding"] = args.stochastic_decoding
+        hparams["max_decode_attempts"] = args.max_decode_attempts
     else:
         start_epoch = 0
 
