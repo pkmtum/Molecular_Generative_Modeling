@@ -37,6 +37,7 @@ class GraphDiscriminator(nn.Module):
     def forward(self, x):
         adj_triu_mat, node_mat, edge_mat = x
 
+
         softmax = torch.nn.Softmax(dim=2)
 
         node_mat = softmax(node_mat)

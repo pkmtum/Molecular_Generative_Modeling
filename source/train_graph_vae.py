@@ -10,6 +10,7 @@ import functools
 
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 from torch_geometric.datasets import QM9
 import torch_geometric.transforms as T
 from torch_geometric.loader import DataLoader
@@ -92,6 +93,23 @@ def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
     return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi))
 
 
+def adversarial_loss_func(logits: torch.Tensor, target_is_real: bool, for_discriminator: bool):
+
+    if not for_discriminator and not target_is_real:
+        target_is_real = True  # With generator, we always want this to be true!
+        raise ValueError()
+
+    if target_is_real:
+        target = torch.ones_like(logits, device=logits.device)
+    else:
+        target = torch.zeros_like(logits, device=logits.device)
+
+    loss_func = torch.nn.BCEWithLogitsLoss()
+    loss = loss_func(logits, target)
+
+    return loss
+
+
 def train_model(
         graph_vae_model: GraphVAE,
         optimizer: torch.optim.Optimizer,
@@ -111,7 +129,12 @@ def train_model(
     val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
     validation_interval = 100
 
-    discriminator = GraphDiscriminator(hparams=hparams).to("cuda")
+    # TODO: move this outside of the function
+    # discriminator = GraphDiscriminator(hparams=hparams).to("cuda")
+    # optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=1e-5)
+    # warmum_epochs = 4
+    # adversarial_weight = 1e-2
+
 
     kl_schedule_type = hparams["kl_schedule"]
     kl_schedule_func = None
@@ -139,15 +162,47 @@ def train_model(
             train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
             train_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
             train_loss = train_recon_loss + kl_weight * train_kl_divergence
+            train_elbo = -train_loss
 
-            # TODO: add adversarial loss
-            print(discriminator(train_recon).shape)
+            # adversarial loss
+            # if epoch >= warmum_epochs:
+            #     logits_fake = discriminator(train_recon)
+            #     adversarial_loss = adversarial_loss_func(logits_fake, target_is_real=True, for_discriminator=False)
+            #     train_loss += adversarial_weight * adversarial_loss
 
             train_loss.backward()
             optimizer.step()
 
+
+            # train discriminator
+            # if epoch >= warmum_epochs:
+            #     optimizer_discriminator.zero_grad()
+
+            #     train_recon = (
+            #         train_recon[0].contiguous().detach(),
+            #         train_recon[1].contiguous().detach(),
+            #         train_recon[2].contiguous().detach(),
+            #     )
+            #     train_target = (
+            #         train_target[0].contiguous().detach(),
+            #         train_target[1].contiguous().detach(),
+            #         train_target[2].contiguous().detach(),
+            #     )
+
+            #     logits_fake = discriminator(train_recon)
+            #     adversarial_loss_fake = adversarial_loss_func(logits_fake, target_is_real=False, for_discriminator=True)
+            #     logits_real = discriminator(train_target)
+            #     adversarial_loss_real = adversarial_loss_func(logits_real, target_is_real=True, for_discriminator=True)
+
+            #     loss_discriminator = adversarial_weight * (adversarial_loss_fake + adversarial_loss_real) * 0.5
+
+            #     loss_discriminator.backward()
+            #     optimizer_discriminator.step()
+
+            #     tb_writer.add_scalars("Discriminator Loss", {"Training": loss_discriminator.item()}, iteration)
+
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
-            tb_writer.add_scalars("ELBO", {"Training": -train_loss.item()}, iteration)
+            tb_writer.add_scalars("ELBO", {"Training": train_elbo.item()}, iteration)
             tb_writer.add_scalars("Reconstruction Loss", {"Training": train_recon_loss.item()}, iteration)
             tb_writer.add_scalar("KL Weight", kl_weight, iteration)
             tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence.item()}, iteration)
