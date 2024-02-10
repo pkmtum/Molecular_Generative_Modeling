@@ -118,7 +118,7 @@ class AddNodeAttributeMatrix(BaseTransform):
     ) -> Union[Data, HeteroData]:
         num_nodes_to_pad = self.max_num_nodes - data.x.shape[0]
 
-        # pad with hydrogen
+        # padding with hydrogen
         padding_value = [1] + [0] * (data.x.shape[1] - 1)
 
         padding_tensor = torch.tensor([padding_value] * num_nodes_to_pad)
@@ -143,6 +143,58 @@ class AddEdgeAttributeMatrix(BaseTransform):
     ) -> Union[Data, HeteroData]:
         adj_mat = to_dense_adj(edge_index=data.edge_index, edge_attr=data.edge_attr, max_num_nodes=self.max_num_nodes)
         data.edge_triu_mat = adj_mat[:, self.triu_mask]
+        return data
+    
+class RandomPermutation(BaseTransform):
+    """ 
+    Randomly permutes the adjacency matrix of a graphs.
+    Also permutes the edge and node attribute matrices accordingly.
+    """
+
+    def __init__(self, max_num_nodes: int) -> None:
+        self.max_num_nodes = max_num_nodes
+        self.triu_mask_adj = torch.ones(max_num_nodes, max_num_nodes).triu() == 1
+        self.triu_mask_edge = torch.ones(max_num_nodes, max_num_nodes).triu(diagonal=1) == 1
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        adj_triu_mat = data.adj_triu_mat
+        node_mat = data.node_mat
+        edge_triu_mat = data.edge_triu_mat
+
+        batch_size = adj_triu_mat.shape[0]
+        device = adj_triu_mat.device
+        n = self.max_num_nodes
+
+        permutations = torch.rand(batch_size, n).argsort(dim = 1)
+
+        # construct full edge attribute matrix from upper triangular
+        edge_mat = torch.zeros(batch_size, n, n, 4, device=device)
+        edge_mat[:, self.triu_mask_edge] = edge_triu_mat
+        edge_mat = edge_mat + edge_mat.transpose(1, 2)
+        
+        # construct full adjacency matrix from upper triangular
+        adj_mat = torch.zeros(batch_size, n, n, device=device)
+        adj_mat[:, self.triu_mask_adj == 1] = adj_triu_mat
+        adj_mat = adj_mat + adj_mat.transpose(1, 2)
+        adj_mat.diagonal(dim1=1, dim2=2).mul_(0.5)
+
+        perm_adj_mat = torch.zeros_like(adj_mat)
+        perm_node_mat = torch.zeros_like(node_mat)
+        perm_edge_mat = torch.zeros_like(edge_mat)
+        for i in range(batch_size):
+            perm = permutations[i]
+            # Apply the permutation to rows and columns for each matrix
+            perm_adj_mat[i] = adj_mat[i][perm][:, perm]
+            perm_node_mat[i] = node_mat[i][perm]
+            perm_edge_mat[i] = edge_mat[i][perm][:, perm]
+    
+        data.adj_triu_mat = perm_adj_mat[:, self.triu_mask_adj]
+        data.node_mat = perm_node_mat
+        data.edge_triu_mat = perm_edge_mat[:, self.triu_mask_edge]
+
         return data
 
 

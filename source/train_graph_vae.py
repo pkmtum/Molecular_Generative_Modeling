@@ -27,24 +27,28 @@ from graph_vae.discriminator import GraphDiscriminator
 from data_utils import *
 
 
-def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool) -> QM9:
-    transform_list = [
+def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, permute: bool) -> QM9:
+    pre_transform_list = [
         SelectQM9TargetProperties(properties=["homo", "lumo"]),
         SelectQM9NodeFeatures(features=["atom_type"]),
     ]
     if not include_hydrogen:
-        transform_list.append(DropQM9Hydrogen())
+        pre_transform_list.append(DropQM9Hydrogen())
 
     max_num_nodes = 29 if include_hydrogen else 9
-    transform_list += [
+    pre_transform_list += [
         AddAdjacencyMatrix(max_num_nodes=max_num_nodes),
         AddNodeAttributeMatrix(max_num_nodes=max_num_nodes),
         AddEdgeAttributeMatrix(max_num_nodes=max_num_nodes),
         # DropAttributes(attributes=["z", "pos", "idx", "name"]),
     ]
+    pre_transform = T.Compose(pre_transform_list)
 
-    pre_transform = T.Compose(transform_list)
-    transform = T.ToDevice(device=device)
+    transform_list = []
+    if permute:
+        transform_list.append(RandomPermutation(max_num_nodes=max_num_nodes))
+    transform_list.append(T.ToDevice(device=device))
+    transform = T.Compose(transform_list)
 
     # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
     dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
@@ -129,13 +133,6 @@ def train_model(
     val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
     validation_interval = 100
 
-    # TODO: move this outside of the function
-    # discriminator = GraphDiscriminator(hparams=hparams).to("cuda")
-    # optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=1e-5)
-    # warmum_epochs = 4
-    # adversarial_weight = 1e-2
-
-
     kl_schedule_type = hparams["kl_schedule"]
     kl_schedule_func = None
     if kl_schedule_type == "constant":
@@ -164,42 +161,8 @@ def train_model(
             train_loss = train_recon_loss + kl_weight * train_kl_divergence
             train_elbo = -train_loss
 
-            # adversarial loss
-            # if epoch >= warmum_epochs:
-            #     logits_fake = discriminator(train_recon)
-            #     adversarial_loss = adversarial_loss_func(logits_fake, target_is_real=True, for_discriminator=False)
-            #     train_loss += adversarial_weight * adversarial_loss
-
             train_loss.backward()
-            optimizer.step()
-
-
-            # train discriminator
-            # if epoch >= warmum_epochs:
-            #     optimizer_discriminator.zero_grad()
-
-            #     train_recon = (
-            #         train_recon[0].contiguous().detach(),
-            #         train_recon[1].contiguous().detach(),
-            #         train_recon[2].contiguous().detach(),
-            #     )
-            #     train_target = (
-            #         train_target[0].contiguous().detach(),
-            #         train_target[1].contiguous().detach(),
-            #         train_target[2].contiguous().detach(),
-            #     )
-
-            #     logits_fake = discriminator(train_recon)
-            #     adversarial_loss_fake = adversarial_loss_func(logits_fake, target_is_real=False, for_discriminator=True)
-            #     logits_real = discriminator(train_target)
-            #     adversarial_loss_real = adversarial_loss_func(logits_real, target_is_real=True, for_discriminator=True)
-
-            #     loss_discriminator = adversarial_weight * (adversarial_loss_fake + adversarial_loss_real) * 0.5
-
-            #     loss_discriminator.backward()
-            #     optimizer_discriminator.step()
-
-            #     tb_writer.add_scalars("Discriminator Loss", {"Training": loss_discriminator.item()}, iteration)
+            optimizer.step()        
 
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
             tb_writer.add_scalars("ELBO", {"Training": train_elbo.item()}, iteration)
@@ -373,6 +336,7 @@ def main():
     parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--permute", action="store_true", help="Randomly permute adjacency matrices during training.")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -381,7 +345,8 @@ def main():
     dataset = create_qm9_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen, 
-        refresh_data_cache=args.refresh_data_cache
+        refresh_data_cache=args.refresh_data_cache,
+        permute=args.permute
     )
     train_dataset, val_dataset, test_dataset = create_qm9_data_split(dataset=dataset)
     if args.train_sample_limit is not None:
