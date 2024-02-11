@@ -27,9 +27,9 @@ from graph_vae.discriminator import GraphDiscriminator
 from data_utils import *
 
 
-def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, permute: bool) -> QM9:
+def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, permute: bool, properties: List[str]) -> QM9:
     pre_transform_list = [
-        SelectQM9TargetProperties(properties=["homo", "lumo"]),
+        SelectQM9TargetProperties(properties=properties),
         SelectQM9NodeFeatures(features=["atom_type"]),
     ]
     if not include_hydrogen:
@@ -129,6 +129,8 @@ def train_model(
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_checkpoint = f"./checkpoints/graph_vae_{timestamp}.pt"
 
+    properties = hparams["properties"]
+
     # get dataloaders
     val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
     validation_interval = 100
@@ -153,7 +155,11 @@ def train_model(
 
             kl_weight = kl_schedule_func(iteration)
             
-            train_recon, mu, sigma = graph_vae_model(train_batch)
+            train_model_ouput = graph_vae_model(train_batch)
+            train_recon, mu, sigma = train_model_ouput[:3]
+            if len(properties) > 0:
+                train_predicted_properties = train_model_ouput[3]
+
             train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
 
             train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
@@ -178,7 +184,12 @@ def train_model(
                 val_loader = next(val_subset_loader_iterator)
                 with torch.no_grad():
                     for val_batch in val_loader:
-                        val_recon, mu, sigma = graph_vae_model(val_batch)
+                        model_output = graph_vae_model(val_batch)
+                        val_recon, mu, sigma = model_output[:3]
+
+                        if len(properties) > 0:
+                            val_predicted_properties = model_output[3]
+
                         val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
 
                         val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
@@ -225,12 +236,18 @@ def evaluate_model(
         "Decoder Parameter Count": sum(p.numel() for p in graph_vae_model.decoder.parameters() if p.requires_grad),
     })
 
+    properties = hparams["properties"]
 
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
     for val_batch in tqdm(val_loader, desc="Evaluating Reconstruction Performance"):
-        val_recon, mu, sigma = graph_vae_model(val_batch)
+        model_output = graph_vae_model(val_batch)
+        val_recon, mu, sigma = model_output[:3]
+
+        if len(properties) > 0:
+            val_predicted_properties = model_output[3]
+        
         val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
 
         val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
@@ -336,17 +353,26 @@ def main():
     parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
     parser.add_argument("--permute", action="store_true", help="Randomly permute adjacency matrices during training.")
     args = parser.parse_args()
 
+    # --properties=homo,lumo
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if args.properties is not None:
+        properties = args.properties.split(",")
+    else:
+        properties = []
 
     # create dataset and dataloaders
     dataset = create_qm9_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen, 
         refresh_data_cache=args.refresh_data_cache,
-        permute=args.permute
+        permute=args.permute,
+        properties=properties
     )
     train_dataset, val_dataset, test_dataset = create_qm9_data_split(dataset=dataset)
     if args.train_sample_limit is not None:
@@ -373,6 +399,7 @@ def main():
         "include_hydrogen": args.include_hydrogen,
         "stochastic_decoding": args.stochastic_decoding,
         "max_decode_attempts": args.max_decode_attempts,
+        "properties": properties
     }
 
     # setup model and optimizer
@@ -397,7 +424,7 @@ def main():
         start_epoch = 0
 
     # create tensorboard summary writer
-    tb_writer = create_tensorboard_writer(experiment_name="graph_vae")
+    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_test")
 
     # train the model
     out_checkpoint_path = train_model(

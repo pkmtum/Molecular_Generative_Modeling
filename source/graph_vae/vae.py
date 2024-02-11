@@ -24,6 +24,19 @@ class GraphVAE(nn.Module):
         self.num_node_features = hparams["num_node_features"]
         self.num_edge_features = hparams["num_edge_features"]
 
+        self.num_properties = len(hparams["properties"])
+        if self.num_properties > 0:
+            self.properties_predictor = nn.Sequential(
+                nn.Linear(self.latent_dim, 67),
+                nn.BatchNorm1d(67),
+                nn.ReLU(),
+                nn.Linear(67, 67),
+                nn.BatchNorm1d(67),
+                nn.ReLU(),
+                nn.Linear(67, self.num_properties),
+            )
+
+
         rows, cols = torch.triu_indices(self.max_num_nodes, self.max_num_nodes)
         self.diag_triu_mask = rows == cols
 
@@ -40,7 +53,7 @@ class GraphVAE(nn.Module):
         std_norm = torch.randn_like(mu)
         return std_norm * sigma + mu
 
-    def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, log_var = self.encoder(data)
 
         log_var = torch.clamp(log_var, -30.0, 20.0)
@@ -48,7 +61,13 @@ class GraphVAE(nn.Module):
 
         z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
         x = self.decoder(z)
-        return x, mu, sigma
+
+        if self.num_properties > 0:
+            y = self.properties_predictor(z)
+        else:
+            y = None
+
+        return x, mu, sigma, y
     
     @staticmethod
     def kl_divergence(mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
