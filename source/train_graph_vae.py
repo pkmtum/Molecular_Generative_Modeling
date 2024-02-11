@@ -130,6 +130,7 @@ def train_model(
     out_checkpoint = f"./checkpoints/graph_vae_{timestamp}.pt"
 
     properties = hparams["properties"]
+    predict_properties = len(properties) > 0
 
     # get dataloaders
     val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
@@ -157,8 +158,6 @@ def train_model(
             
             train_model_ouput = graph_vae_model(train_batch)
             train_recon, mu, sigma = train_model_ouput[:3]
-            if len(properties) > 0:
-                train_predicted_properties = train_model_ouput[3]
 
             train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
 
@@ -166,6 +165,11 @@ def train_model(
             train_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
             train_loss = train_recon_loss + kl_weight * train_kl_divergence
             train_elbo = -train_loss
+
+            if predict_properties:
+                train_predicted_properties = train_model_ouput[3]
+                train_property_loss = F.mse_loss(train_predicted_properties, train_batch.y)
+                train_loss += train_property_loss
 
             train_loss.backward()
             optimizer.step()        
@@ -175,10 +179,14 @@ def train_model(
             tb_writer.add_scalars("Reconstruction Loss", {"Training": train_recon_loss.item()}, iteration)
             tb_writer.add_scalar("KL Weight", kl_weight, iteration)
             tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence.item()}, iteration)
+            if predict_properties:
+                tb_writer.add_scalars("Property Regression Loss", {"Training": train_property_loss.item()}, iteration)
             
             if (iteration + 1) % validation_interval == 0 or iteration == 0:
                 graph_vae_model.eval()
                 val_loss_sum = 0
+                val_elbo_sum = 0
+                val_property_loss_sum = 0
 
                 # Get the next subset of the validation set
                 val_loader = next(val_subset_loader_iterator)
@@ -187,22 +195,32 @@ def train_model(
                         model_output = graph_vae_model(val_batch)
                         val_recon, mu, sigma = model_output[:3]
 
-                        if len(properties) > 0:
-                            val_predicted_properties = model_output[3]
-
                         val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
 
                         val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
                         val_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
                         val_loss = val_recon_loss + kl_weight * val_kl_divergence
 
+                        val_elbo_sum -= val_loss
+
+                        if predict_properties:
+                            val_predicted_properties = model_output[3]
+                            val_property_loss = F.mse_loss(val_predicted_properties, val_batch.y)
+                            val_property_loss_sum += val_property_loss
+
+                            val_loss += val_property_loss
+                            
                         val_loss_sum += val_loss
-                
+                        
                 val_loss = val_loss_sum / len(val_loader)
+                val_elbo = val_elbo_sum / len(val_loader)
                 tb_writer.add_scalars("Loss", {"Validation": val_loss.item()}, iteration)
-                tb_writer.add_scalars("ELBO", {"Validation": -val_loss.item()}, iteration)
+                tb_writer.add_scalars("ELBO", {"Validation": val_elbo.item()}, iteration)
                 tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss.item()}, iteration)
                 tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence.item()}, iteration)
+                if predict_properties:
+                    val_property_loss = val_property_loss_sum / len(val_loader)
+                    tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss.item()}, iteration)
                 
                 graph_vae_model.train()
 
@@ -237,6 +255,8 @@ def evaluate_model(
     })
 
     properties = hparams["properties"]
+
+    log_hparams["properties"] = ",".join(hparams["properties"])
 
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
@@ -424,7 +444,7 @@ def main():
         start_epoch = 0
 
     # create tensorboard summary writer
-    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_test")
+    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_prop")
 
     # train the model
     out_checkpoint_path = train_model(
