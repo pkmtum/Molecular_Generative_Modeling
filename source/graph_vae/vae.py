@@ -191,7 +191,17 @@ class GraphVAE(nn.Module):
         z = torch.randn((num_samples, self.latent_dim), device=device)
         x = self.decoder(z)
         return z, x
-    
+
+
+    def predict_properties(self, z: torch.Tensor) -> torch.Tensor:
+        if self.num_properties == 0:
+            raise ValueError("Model has not been trained with property prediction")
+        return self.properties_predictor(z)
+
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.decoder(z)
+
 
     def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], stochastic: bool) -> Data:
         # TODO: handle batches
