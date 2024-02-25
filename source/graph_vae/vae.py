@@ -76,8 +76,8 @@ class GraphVAE(nn.Module):
         mu_squared = mu * mu
         # technically this is the correct KL-divergence
         # but in practice it is way too high
-        # kl_div_sample = 0.5 * torch.sum(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
-        kl_div_sample = 0.5 * torch.mean(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
+        kl_div_sample = 0.5 * torch.sum(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
+        #kl_div_sample = 0.5 * torch.mean(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
         # average over the batch
         return torch.mean(kl_div_sample)
     

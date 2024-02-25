@@ -12,28 +12,43 @@ class Decoder(nn.Module):
         self.fcls = nn.Sequential(
             nn.Linear(in_features=hparams["latent_dim"], out_features=128),
             nn.BatchNorm1d(num_features=128),
-            nn.ReLU(),
+            nn.PReLU(),
             nn.Linear(in_features=128, out_features=256),
             nn.BatchNorm1d(num_features=256),
-            nn.ReLU(),
+            nn.PReLU(),
             nn.Linear(in_features=256, out_features=512),
             nn.BatchNorm1d(num_features=512),
-            nn.ReLU(),
+            nn.PReLU(),
         )
 
-        self.max_num_nodes = hparams["max_num_nodes"]
+        self.max_num_nodes = hparams["max_num_nodes"] 
         self.num_node_features = hparams["num_node_features"]
 
         # the atom graph is symmetric so we only predict the upper triangular part
         # and the diagonal that indicates the presence of nodes
         upper_triangular_diag_size = int(self.max_num_nodes * (self.max_num_nodes + 1) / 2)
-        self.fc_adjacency = nn.Linear(in_features=512, out_features=upper_triangular_diag_size)
+        self.fc_adjacency = nn.Sequential(
+            nn.Linear(in_features=512, out_features=512),
+            nn.BatchNorm1d(512),
+            nn.PReLU(),
+            nn.Linear(in_features=512, out_features=upper_triangular_diag_size)
+        )
 
-        self.fc_node_features = nn.Linear(in_features=512, out_features=self.max_num_nodes * self.num_node_features)
-
+        self.fc_node_features = nn.Sequential(
+            nn.Linear(in_features=512, out_features=512),
+            nn.BatchNorm1d(512),
+            nn.PReLU(),
+            nn.Linear(in_features=512, out_features=self.max_num_nodes * self.num_node_features),
+        )
+        
         self.max_num_edges = int(self.max_num_nodes * (self.max_num_nodes - 1) / 2)
         self.num_edge_features = hparams["num_edge_features"]
-        self.fc_edge_features = nn.Linear(in_features=512, out_features=self.max_num_edges * self.num_edge_features)
+        self.fc_edge_features = nn.Sequential(
+            nn.Linear(in_features=512, out_features=512),
+            nn.BatchNorm1d(512),
+            nn.PReLU(),
+            nn.Linear(in_features=512, out_features=self.max_num_edges * self.num_edge_features)
+        )
         
 
     def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

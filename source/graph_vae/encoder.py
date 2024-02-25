@@ -99,14 +99,23 @@ class Encoder(nn.Module):
             out_channels=32
         )
         self.batch_norm_1 = BatchNorm(in_channels=32)
+        self.relu_1 = nn.PReLU()
         self.ecc_conv_2 = ECCConv(
             num_edge_features=hparams["num_edge_features"],
             in_channels=32,
             out_channels=64
         )
         self.batch_norm_2 = BatchNorm(in_channels=64)
+        self.relu_2 = nn.PReLU()
+        self.ecc_conv_3 = ECCConv(
+            num_edge_features=hparams["num_edge_features"],
+            in_channels=64,
+            out_channels=128
+        )
+        self.batch_norm_3 = BatchNorm(in_channels=128)
+        self.relu_3 = nn.PReLU()
 
-        self.graph_pooling = GlobalGraphPooling(in_channels=64, out_channels=128)
+        self.graph_pooling = GlobalGraphPooling(in_channels=128, out_channels=128)
 
         # output 2 time the size of the latent vector
         # one half contains mu and the other half log(sigma)
@@ -118,10 +127,13 @@ class Encoder(nn.Module):
 
         x = self.ecc_conv_1(x, edge_index, edge_attr)
         x = self.batch_norm_1(x)
-        x = F.relu(x)
+        x = self.relu_1(x)
         x = self.ecc_conv_2(x, edge_index, edge_attr)
         x = self.batch_norm_2(x)
-        x = F.relu(x)
+        x = self.relu_2(x)
+        x = self.ecc_conv_3(x, edge_index, edge_attr)
+        x = self.batch_norm_3(x)
+        x = self.relu_3(x)
 
         x = self.graph_pooling(x, batch)
 

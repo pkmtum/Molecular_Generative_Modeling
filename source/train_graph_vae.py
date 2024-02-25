@@ -97,22 +97,10 @@ def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
     return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi))
 
 
-def adversarial_loss_func(logits: torch.Tensor, target_is_real: bool, for_discriminator: bool):
-
-    if not for_discriminator and not target_is_real:
-        target_is_real = True  # With generator, we always want this to be true!
-        raise ValueError()
-
-    if target_is_real:
-        target = torch.ones_like(logits, device=logits.device)
-    else:
-        target = torch.zeros_like(logits, device=logits.device)
-
-    loss_func = torch.nn.BCEWithLogitsLoss()
-    loss = loss_func(logits, target)
-
-    return loss
-
+def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteration: int) -> float:
+    length = end_iteration - start_iteration
+    x = min(max(iteration - start_iteration, 0) / length, 1)
+    return 0.5 * (1 + math.cos((1 + x) * math.pi))
 
 def train_model(
         graph_vae_model: GraphVAE,
@@ -145,6 +133,13 @@ def train_model(
         num_cycles = 4
         cycle_length = math.ceil(total_iteration_count / num_cycles)
         kl_schedule_func = functools.partial(cyclic_cosine_schedule, cycle_length=cycle_length)
+    elif kl_schedule_type == "monotonic":
+        total_iteration_count = len(train_loader) * epochs
+        start_iteration = int(total_iteration_count * 0.25)
+        end_iteration = int(total_iteration_count * 0.75)
+        kl_schedule_func = functools.partial(monotonic_cosine_schedule, start_iteration=start_iteration, end_iteration=end_iteration)
+
+    kl_weight_scale = hparams["kl_weight"]
 
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
@@ -154,7 +149,7 @@ def train_model(
 
             iteration = len(train_loader) * epoch + batch_index
 
-            kl_weight = kl_schedule_func(iteration)
+            kl_weight = kl_schedule_func(iteration) * kl_weight_scale
             
             train_model_ouput = graph_vae_model(train_batch)
             train_recon, mu, sigma = train_model_ouput[:3]
@@ -255,13 +250,16 @@ def evaluate_model(
     })
 
     properties = hparams["properties"]
+    include_hydrogen = hparams["include_hydrogen"]
 
     log_hparams["properties"] = ",".join(hparams["properties"])
+
+    kl_weight = hparams["kl_weight"]
 
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
-    for val_batch in tqdm(val_loader, desc="Evaluating Reconstruction Performance"):
+    for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
         model_output = graph_vae_model(val_batch)
         val_recon, mu, sigma = model_output[:3]
 
@@ -269,9 +267,21 @@ def evaluate_model(
             val_predicted_properties = model_output[3]
         
         val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
+        
+        # plot input and reconstruction graphs in first batch to tensorboard
+        if val_index == 0:
+            batch_size = val_batch.adj_triu_mat.shape[0]
+            for i in range(batch_size):
+                input_mol = graph_to_mol(data=val_batch[i], includes_h=include_hydrogen, validate=False)
+                x = (val_recon[0][i:i+1], val_recon[1][i:i+1], val_recon[2][i:i+1])
+                recon_graph = graph_vae_model.output_to_graph(x=x, stochastic=False)
+                recon_mol = graph_to_mol(data=recon_graph, includes_h=include_hydrogen, validate=False)
+
+                tb_writer.add_image('Validation Input', mol_to_image_tensor(mol=input_mol), global_step=i, dataformats="NCHW")
+                tb_writer.add_image('Validation Reconstruction', mol_to_image_tensor(mol=recon_mol), global_step=i, dataformats="NCHW")
 
         val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-        val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+        val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma) * kl_weight
 
         val_elbo_sum -= val_loss
         val_log_likelihood_sum -= val_recon_loss
@@ -369,12 +379,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
-    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
+    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="monotonic", help="Type of annealing schedule to use for the weight of the KL divergence.")
     parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
     parser.add_argument("--permute", action="store_true", help="Randomly permute adjacency matrices during training.")
+    parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
     args = parser.parse_args()
 
     # --properties=homo,lumo
@@ -419,7 +430,8 @@ def main():
         "include_hydrogen": args.include_hydrogen,
         "stochastic_decoding": args.stochastic_decoding,
         "max_decode_attempts": args.max_decode_attempts,
-        "properties": properties
+        "properties": properties,
+        "kl_weight": args.kl_weight,
     }
 
     # setup model and optimizer
@@ -446,17 +458,24 @@ def main():
     # create tensorboard summary writer
     tb_writer = create_tensorboard_writer(experiment_name="graph_vae_prop")
 
-    # train the model
-    out_checkpoint_path = train_model(
-        graph_vae_model=graph_vae_model,
-        optimizer=optimizer,
-        hparams=hparams,
-        train_loader=data_loaders["train"],
-        val_subset_loaders=data_loaders["val_subsets"],
-        tb_writer=tb_writer,
-        epochs=args.epochs,
-        start_epoch=start_epoch
-    )
+    if args.epochs > 0:
+        # train the model
+        out_checkpoint_path = train_model(
+            graph_vae_model=graph_vae_model,
+            optimizer=optimizer,
+            hparams=hparams,
+            train_loader=data_loaders["train"],
+            val_subset_loaders=data_loaders["val_subsets"],
+            tb_writer=tb_writer,
+            epochs=args.epochs,
+            start_epoch=start_epoch
+        )
+    elif args.checkpoint is not None:
+        out_checkpoint_path = args.checkpoint
+    else:
+        # when epochs = 0 we are only evaluating the model
+        # thus we need a checkpoint to load from
+        raise ValueError("Missing trainng checkpoint!")
 
     # evaluate the model
     evaluate_model(
