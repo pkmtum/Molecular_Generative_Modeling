@@ -415,6 +415,9 @@ def main():
         batch_size=args.batch_size,
     )
 
+    # TODO: plot node, edge and adj loss seperately
+    # TODO: add weights to each loss term
+
     # hyperparamers
     hparams = {
         "batch_size": args.batch_size,
