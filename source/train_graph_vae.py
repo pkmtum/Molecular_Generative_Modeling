@@ -207,7 +207,7 @@ def train_model(
                 tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss.item()}, iteration)
                 tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence.item()}, iteration)
                 if predict_properties:
-                    val_property_loss = val_property_loss_sum / len(val_loader)
+                    val_property_loss = val_property_loss_sum / batches_per_validation
                     tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss.item()}, iteration)
                 
                 graph_vae_model.train()
