@@ -73,13 +73,6 @@ def create_dataloaders(
         "train": DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
         "val": DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     }
-
-    val_subset_count = 32
-    dataloaders["val_subsets"] = create_validation_subset_loaders(
-        validation_dataset=val_dataset,
-        subset_count=val_subset_count,
-        batch_size=batch_size
-    )
     return dataloaders
 
 
@@ -107,7 +100,7 @@ def train_model(
         optimizer: torch.optim.Optimizer,
         hparams: Dict[str, Union[bool, int, float]],
         train_loader: DataLoader,
-        val_subset_loaders: List[DataLoader],
+        val_loader: DataLoader,
         tb_writer: SummaryWriter,
         epochs: int,
         start_epoch: int,
@@ -121,8 +114,9 @@ def train_model(
     predict_properties = len(properties) > 0
 
     # get dataloaders
-    val_subset_loader_iterator = itertools.cycle(val_subset_loaders)
+    val_loader_iterator = itertools.cycle(iter(val_loader))
     validation_interval = 100
+    batches_per_validation = 2
 
     kl_schedule_type = hparams["kl_schedule"]
     kl_schedule_func = None
@@ -183,10 +177,9 @@ def train_model(
                 val_elbo_sum = 0
                 val_property_loss_sum = 0
 
-                # Get the next subset of the validation set
-                val_loader = next(val_subset_loader_iterator)
                 with torch.no_grad():
-                    for val_batch in val_loader:
+                    for _ in range(batches_per_validation):
+                        val_batch = next(val_loader_iterator)
                         model_output = graph_vae_model(val_batch)
                         val_recon, mu, sigma = model_output[:3]
 
@@ -207,8 +200,8 @@ def train_model(
                             
                         val_loss_sum += val_loss
                         
-                val_loss = val_loss_sum / len(val_loader)
-                val_elbo = val_elbo_sum / len(val_loader)
+                val_loss = val_loss_sum / batches_per_validation
+                val_elbo = val_elbo_sum / batches_per_validation
                 tb_writer.add_scalars("Loss", {"Validation": val_loss.item()}, iteration)
                 tb_writer.add_scalars("ELBO", {"Validation": val_elbo.item()}, iteration)
                 tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss.item()}, iteration)
@@ -259,32 +252,33 @@ def evaluate_model(
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
-    for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
-        model_output = graph_vae_model(val_batch)
-        val_recon, mu, sigma = model_output[:3]
+    with torch.no_grad():
+        for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
+            model_output = graph_vae_model(val_batch)
+            val_recon, mu, sigma = model_output[:3]
 
-        if len(properties) > 0:
-            val_predicted_properties = model_output[3]
-        
-        val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
-        
-        # plot input and reconstruction graphs in first batch to tensorboard
-        if val_index == 0:
-            batch_size = val_batch.adj_triu_mat.shape[0]
-            for i in range(batch_size):
-                input_mol = graph_to_mol(data=val_batch[i], includes_h=include_hydrogen, validate=False)
-                x = (val_recon[0][i:i+1], val_recon[1][i:i+1], val_recon[2][i:i+1])
-                recon_graph = graph_vae_model.output_to_graph(x=x, stochastic=False)
-                recon_mol = graph_to_mol(data=recon_graph, includes_h=include_hydrogen, validate=False)
+            if len(properties) > 0:
+                val_predicted_properties = model_output[3]
+            
+            val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
+            
+            # plot input and reconstruction graphs in first batch to tensorboard
+            if val_index == 0:
+                batch_size = val_batch.adj_triu_mat.shape[0]
+                for i in range(batch_size):
+                    input_mol = graph_to_mol(data=val_batch[i], includes_h=include_hydrogen, validate=False)
+                    x = (val_recon[0][i:i+1], val_recon[1][i:i+1], val_recon[2][i:i+1])
+                    recon_graph = graph_vae_model.output_to_graph(x=x, stochastic=False)
+                    recon_mol = graph_to_mol(data=recon_graph, includes_h=include_hydrogen, validate=False)
 
-                tb_writer.add_image('Validation Input', mol_to_image_tensor(mol=input_mol), global_step=i, dataformats="NCHW")
-                tb_writer.add_image('Validation Reconstruction', mol_to_image_tensor(mol=recon_mol), global_step=i, dataformats="NCHW")
+                    tb_writer.add_image('Validation Input', mol_to_image_tensor(mol=input_mol), global_step=i, dataformats="NCHW")
+                    tb_writer.add_image('Validation Reconstruction', mol_to_image_tensor(mol=recon_mol), global_step=i, dataformats="NCHW")
 
-        val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-        val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma) * kl_weight
+            val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
+            val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma) * kl_weight
 
-        val_elbo_sum -= val_loss
-        val_log_likelihood_sum -= val_recon_loss
+            val_elbo_sum -= val_loss
+            val_log_likelihood_sum -= val_recon_loss
 
     metrics = dict()
     metrics.update({
@@ -468,7 +462,7 @@ def main():
             optimizer=optimizer,
             hparams=hparams,
             train_loader=data_loaders["train"],
-            val_subset_loaders=data_loaders["val_subsets"],
+            val_loader=data_loaders["val"],
             tb_writer=tb_writer,
             epochs=args.epochs,
             start_epoch=start_epoch

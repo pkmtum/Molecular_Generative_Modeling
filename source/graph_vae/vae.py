@@ -29,10 +29,10 @@ class GraphVAE(nn.Module):
             self.properties_predictor = nn.Sequential(
                 nn.Linear(self.latent_dim, 67),
                 nn.BatchNorm1d(67),
-                nn.ReLU(),
+                nn.PReLU(),
                 nn.Linear(67, 67),
                 nn.BatchNorm1d(67),
-                nn.ReLU(),
+                nn.PReLU(),
                 nn.Linear(67, self.num_properties),
             )
 
