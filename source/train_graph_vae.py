@@ -378,7 +378,7 @@ def main():
     parser.add_argument("--train_sample_limit", type=int, help="Maximum number of training samples to use. If unspecified, the full training set is used.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
-    parser.add_argument("--latent_dim", type=int, default=80, help="Number of dimensions of the latent space.")
+    parser.add_argument("--latent_dim", type=int, default=128, help="Number of dimensions of the latent space.")
     parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="monotonic", help="Type of annealing schedule to use for the weight of the KL divergence.")
     parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
@@ -459,7 +459,7 @@ def main():
         start_epoch = 0
 
     # create tensorboard summary writer
-    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_prop")
+    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_2")
 
     if args.epochs > 0:
         # train the model
