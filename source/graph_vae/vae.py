@@ -263,5 +263,5 @@ class GraphVAE(nn.Module):
             node_feature_sample = pred_node_mat[node_mask].argmax(dim=1)
         x = F.one_hot(node_feature_sample, num_classes=self.num_node_features)
 
-        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        return Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr.float())
     
