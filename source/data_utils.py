@@ -1,12 +1,15 @@
 from typing import List, Union, Tuple
 import os
 import math
+import shutil
 
 import torch
 from torch.utils.data import random_split
 from torch_geometric.transforms import BaseTransform
 from torch_geometric.data import Data, HeteroData, Dataset
 from torch_geometric.loader import DataLoader
+from torch_geometric.datasets import QM9
+import torch_geometric.transforms as T
 from torch_geometric.utils import to_dense_adj, add_self_loops
 from torch.utils.tensorboard import SummaryWriter
 
@@ -315,3 +318,35 @@ def create_validation_subset_loaders(validation_dataset, subset_count, batch_siz
         val_subset = torch.utils.data.Subset(validation_dataset, validation_indices[start_index:end_index])
         validation_subsets.append(DataLoader(val_subset, batch_size=batch_size, shuffle=False))
     return validation_subsets
+
+
+def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, properties: List[str]) -> QM9:
+    pre_transform_list = [SelectQM9NodeFeatures(features=["atom_type"])]
+    if not include_hydrogen:
+        pre_transform_list.append(DropQM9Hydrogen())
+
+    max_num_nodes = 29 if include_hydrogen else 9
+    pre_transform_list += [
+        AddAdjacencyMatrix(max_num_nodes=max_num_nodes),
+        AddNodeAttributeMatrix(max_num_nodes=max_num_nodes),
+        AddEdgeAttributeMatrix(max_num_nodes=max_num_nodes),
+    ]
+    pre_transform = T.Compose(pre_transform_list)
+
+    transform_list = []
+    transform_list.append(T.ToDevice(device=device))
+    transform = T.Compose([
+        SelectQM9TargetProperties(properties=properties),
+        T.ToDevice(device=device),
+    ])
+
+    # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
+    dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+
+    if refresh_data_cache:
+        # remove the processed files and recreate them
+        # this might be necessary when the pre_transform or the pre_filter has been updated
+        shutil.rmtree(dataset.processed_dir)
+        dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+
+    return dataset

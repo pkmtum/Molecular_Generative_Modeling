@@ -185,7 +185,10 @@ class GraphVAE(nn.Module):
 
         z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
         return z
-        
+    
+    def encode_mean(self, x: Data):
+        mu, _ = self.encoder(x)
+        return mu
 
     def sample(self, num_samples: int, device: str):
         z = torch.randn((num_samples, self.latent_dim), device=device)

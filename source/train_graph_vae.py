@@ -1,7 +1,6 @@
 import itertools
 import datetime
 import os
-import shutil
 import argparse
 import json
 from typing import Dict, Any, Union
@@ -11,8 +10,6 @@ import functools
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-from torch_geometric.datasets import QM9
-import torch_geometric.transforms as T
 from torch_geometric.loader import DataLoader
 import torch_geometric.utils as pyg_utils
 
@@ -23,43 +20,7 @@ lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
 from graph_vae.vae import GraphVAE
-from graph_vae.discriminator import GraphDiscriminator
 from data_utils import *
-
-
-def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, permute: bool, properties: List[str]) -> QM9:
-    pre_transform_list = [
-        SelectQM9TargetProperties(properties=properties),
-        SelectQM9NodeFeatures(features=["atom_type"]),
-    ]
-    if not include_hydrogen:
-        pre_transform_list.append(DropQM9Hydrogen())
-
-    max_num_nodes = 29 if include_hydrogen else 9
-    pre_transform_list += [
-        AddAdjacencyMatrix(max_num_nodes=max_num_nodes),
-        AddNodeAttributeMatrix(max_num_nodes=max_num_nodes),
-        AddEdgeAttributeMatrix(max_num_nodes=max_num_nodes),
-        # DropAttributes(attributes=["z", "pos", "idx", "name"]),
-    ]
-    pre_transform = T.Compose(pre_transform_list)
-
-    transform_list = []
-    if permute:
-        transform_list.append(RandomPermutation(max_num_nodes=max_num_nodes))
-    transform_list.append(T.ToDevice(device=device))
-    transform = T.Compose(transform_list)
-
-    # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
-    dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
-
-    if refresh_data_cache:
-        # remove the processed files and recreate them
-        # this might be necessary when the pre_transform or the pre_filter has been updated
-        shutil.rmtree(dataset.processed_dir)
-        dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
-
-    return dataset
 
 
 def create_dataloaders(
@@ -220,6 +181,7 @@ def train_model(
             },
             out_checkpoint
         )
+        print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
 
     return out_checkpoint
 
@@ -365,8 +327,8 @@ def evaluate_model(
 def main():
     parser = argparse.ArgumentParser("Train the GraphVAE generative model on the QM9 dataset.")
     parser.add_argument("--include_hydrogen", action="store_true", help="Include hydrogen atoms in the training data.")
-    parser.add_argument("--refresh_data_cache", action="store_true", 
-        help="Refresh the cached pre-processed dataset. This is required whenever the 'pre_filter' or 'pre_transform' is updated."
+    parser.add_argument("--use_cached_dataset", action="store_true", 
+        help="Use the cached pre-processed dataset for training to avoid time consuming pre-processing before each training run."
     )
     parser.add_argument("--checkpoint", type=str, help="Checkpoint to resume training from.")
     parser.add_argument("--train_sample_limit", type=int, help="Maximum number of training samples to use. If unspecified, the full training set is used.")
@@ -378,7 +340,6 @@ def main():
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
-    parser.add_argument("--permute", action="store_true", help="Randomly permute adjacency matrices during training.")
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
     args = parser.parse_args()
 
@@ -395,8 +356,7 @@ def main():
     dataset = create_qm9_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen, 
-        refresh_data_cache=args.refresh_data_cache,
-        permute=args.permute,
+        refresh_data_cache=not args.use_cached_dataset,
         properties=properties
     )
     train_dataset, val_dataset, test_dataset = create_qm9_data_split(dataset=dataset)
@@ -408,9 +368,6 @@ def main():
         test_dataset=test_dataset,
         batch_size=args.batch_size,
     )
-
-    # TODO: plot node, edge and adj loss seperately
-    # TODO: add weights to each loss term
 
     # hyperparamers
     hparams = {
