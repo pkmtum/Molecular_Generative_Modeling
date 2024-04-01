@@ -214,6 +214,7 @@ def evaluate_model(
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
+    property_prediction_loss = 0
     with torch.no_grad():
         for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
             model_output = graph_vae_model(val_batch)
@@ -221,6 +222,7 @@ def evaluate_model(
 
             if len(properties) > 0:
                 val_predicted_properties = model_output[3]
+                property_prediction_loss += F.mse_loss(val_predicted_properties, val_batch.y)
             
             val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
             
@@ -245,7 +247,8 @@ def evaluate_model(
     metrics = dict()
     metrics.update({
         "ELBO": val_elbo_sum / len(val_loader),
-        "Log-likelihood": val_log_likelihood_sum / len(val_loader)
+        "Log-likelihood": val_log_likelihood_sum / len(val_loader),
+        "Property Prediction MSE": property_prediction_loss / len(val_loader)
     })
 
     # decoding quality metrics
@@ -341,7 +344,14 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
+    parser.add_argument("--logdir", type=str, default="graph_vae_dev", help="Name of the Tensorboard logging directory.")
+    parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
     args = parser.parse_args()
+
+    if args.property_latent_dim is None:
+        property_latent_dim = args.latent_dim
+    else:
+        property_latent_dim = args.property_latent_dim
 
     # --properties=homo,lumo
 
@@ -386,6 +396,7 @@ def main():
         "max_decode_attempts": args.max_decode_attempts,
         "properties": properties,
         "kl_weight": args.kl_weight,
+        "property_latent_dim": property_latent_dim,
     }
 
     # setup model and optimizer
@@ -410,7 +421,7 @@ def main():
         start_epoch = 0
 
     # create tensorboard summary writer
-    tb_writer = create_tensorboard_writer(experiment_name="graph_vae_2")
+    tb_writer = create_tensorboard_writer(experiment_name=args.logdir)
 
     if args.epochs > 0:
         # train the model

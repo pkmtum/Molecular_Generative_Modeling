@@ -23,11 +23,12 @@ class GraphVAE(nn.Module):
         self.max_num_nodes = hparams["max_num_nodes"]
         self.num_node_features = hparams["num_node_features"]
         self.num_edge_features = hparams["num_edge_features"]
+        self.property_z_size = hparams["property_latent_dim"]
 
         self.num_properties = len(hparams["properties"])
         if self.num_properties > 0:
-            self.properties_predictor = nn.Sequential(
-                nn.Linear(self.latent_dim, 67),
+            self.property_predictor = nn.Sequential(
+                nn.Linear(self.property_z_size, 67),
                 nn.BatchNorm1d(67),
                 nn.PReLU(),
                 nn.Linear(67, 67),
@@ -52,6 +53,9 @@ class GraphVAE(nn.Module):
     def _sample_with_reparameterization(self, mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         std_norm = torch.randn_like(mu)
         return std_norm * sigma + mu
+    
+    def z_to_property_z(self, z):
+        return z[:, :self.property_z_size]
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, log_var = self.encoder(data)
@@ -63,7 +67,7 @@ class GraphVAE(nn.Module):
         x = self.decoder(z)
 
         if self.num_properties > 0:
-            y = self.properties_predictor(z)
+            y = self.property_predictor(self.z_to_property_z(z))
         else:
             y = None
 
@@ -199,7 +203,7 @@ class GraphVAE(nn.Module):
     def predict_properties(self, z: torch.Tensor) -> torch.Tensor:
         if self.num_properties == 0:
             raise ValueError("Model has not been trained with property prediction")
-        return self.properties_predictor(z)
+        return self.property_predictor(z)
 
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
