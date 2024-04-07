@@ -23,7 +23,7 @@ class GraphVAE(nn.Module):
         self.max_num_nodes = hparams["max_num_nodes"]
         self.num_node_features = hparams["num_node_features"]
         self.num_edge_features = hparams["num_edge_features"]
-        self.property_z_size = hparams["property_latent_dim"]
+        self.property_z_size = hparams.get("property_latent_dim", self.latent_dim)
 
         self.num_properties = len(hparams["properties"])
         if self.num_properties > 0:

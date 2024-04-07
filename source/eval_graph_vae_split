@@ -1,0 +1,6 @@
+#!/bin/bash
+python train_graph_vae.py --properties=homo,lumo --use_cached_dataset
+python train_graph_vae.py --properties=homo,lumo --use_cached_dataset --property_latent_dim=64
+python train_graph_vae.py --properties=homo,lumo --use_cached_dataset --property_latent_dim=32
+python train_graph_vae.py --properties=homo,lumo --use_cached_dataset --property_latent_dim=16
+python train_graph_vae.py --properties=homo,lumo --use_cached_dataset --property_latent_dim=8
