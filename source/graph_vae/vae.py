@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Tuple, Any, Dict, List
+from typing import Tuple, Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -8,13 +8,15 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.utils import dense_to_sparse, remove_self_loops
 
+import pandas as pd
+
 from .encoder import Encoder
 from .decoder import Decoder
 
 
 class GraphVAE(nn.Module):
 
-    def __init__(self, hparams: Dict[str, Any]) -> None:
+    def __init__(self, hparams: Dict[str, Any], prop_norm_df: Optional[pd.DataFrame] = None) -> None:
         super().__init__()
 
         self.encoder = Encoder(hparams=hparams)
@@ -25,7 +27,8 @@ class GraphVAE(nn.Module):
         self.num_edge_features = hparams["num_edge_features"]
         self.property_z_size = hparams.get("property_latent_dim", self.latent_dim)
 
-        self.num_properties = len(hparams["properties"])
+        properties = hparams["properties"]
+        self.num_properties = len(properties)
         if self.num_properties > 0:
             self.property_predictor = nn.Sequential(
                 nn.Linear(self.property_z_size, 67),
@@ -43,6 +46,20 @@ class GraphVAE(nn.Module):
 
         self.edge_triu_rows, self.edge_triu_cols = torch.triu_indices(self.max_num_nodes, self.max_num_nodes, offset=1)
 
+        # load normalization data        
+        if prop_norm_df is not None:
+            prop_norm_data = torch.tensor(prop_norm_df[properties].values, dtype=torch.float32)
+            prop_mean = prop_norm_data[0]
+            prop_std = prop_norm_data[1]
+        else:
+            # Default values; assuming that the norm data is loaded from a checkpoint later
+            prop_mean = torch.tensor([0.0] * self.num_properties, dtype=torch.float32)
+            prop_std = torch.tensor([1.0] * self.num_properties, dtype=torch.float32)
+
+        self.register_buffer('prop_mean', prop_mean)
+        self.register_buffer('prop_std', prop_std)
+
+
     @staticmethod
     def from_pretrained(checkpoint_path: str) -> GraphVAE:
         checkpoint = torch.load(checkpoint_path)
@@ -50,18 +67,24 @@ class GraphVAE(nn.Module):
         graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
         return graph_vae_model
 
+    def denormalize_properties(self, y):
+        return y * self.prop_std + self.prop_mean
+
     def _sample_with_reparameterization(self, mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         std_norm = torch.randn_like(mu)
         return std_norm * sigma + mu
     
     def z_to_property_z(self, z):
+        """
+        Return the portion of the latent space that is used for property prediction.
+        """
         return z[:, :self.property_z_size]
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, log_var = self.encoder(data)
+        mu, log_sigma = self.encoder(data)
 
-        log_var = torch.clamp(log_var, -30.0, 20.0)
-        sigma = torch.exp(log_var / 2)
+        log_sigma = torch.clamp(log_sigma, -30.0, 20.0)
+        sigma = torch.exp(log_sigma)
 
         z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
         x = self.decoder(z)
@@ -182,10 +205,10 @@ class GraphVAE(nn.Module):
     
 
     def encode(self, x: Data):
-        mu, log_var = self.encoder(x)
+        mu, log_sigma = self.encoder(x)
 
-        log_var = torch.clamp(log_var, -30.0, 20.0)
-        sigma = torch.exp(log_var / 2)
+        log_sigma = torch.clamp(log_sigma, -30.0, 20.0)
+        sigma = torch.exp(log_sigma)
 
         z = self._sample_with_reparameterization(mu=mu, sigma=sigma)
         return z

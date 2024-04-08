@@ -1,4 +1,4 @@
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Optional
 import os
 import math
 import shutil
@@ -16,6 +16,17 @@ from torch.utils.tensorboard import SummaryWriter
 from rdkit import Chem
 from rdkit.Chem import Draw
 import numpy as np
+import pandas as pd
+
+
+# global constants
+DATA_ROOT_DIR = "./data"
+QM9_PROPERTIES = [
+    "mu", "alpha", "homo", "lumo", "gap", "r2",
+    "zpve", "U0", "U", "H", "G", "Cv", "U0_atom",
+    "U_atom", "H_atom", "G_atom", "A", "B", "C"
+]
+
 
 class SelectQM9TargetProperties(BaseTransform):
     """
@@ -23,11 +34,7 @@ class SelectQM9TargetProperties(BaseTransform):
     """
 
     def __init__(self, properties: List[str]):
-        property_names = [
-            "mu", "alpha", "homo", "lumo", "gap", "r2",
-            "zpve", "U0", "U", "H", "G", "Cv", "U0_atom",
-            "U_atom", "H_atom", "G_atom", "A", "B", "C"
-        ]
+        property_names = QM9_PROPERTIES
         property_name_to_index = {
             name: index for index, name in enumerate(property_names)
         }
@@ -38,6 +45,19 @@ class SelectQM9TargetProperties(BaseTransform):
         data: Union[Data, HeteroData],
     ) -> Union[Data, HeteroData]:
         data.y = data.y[:, self.indices]
+        return data
+    
+
+class NormalizeQM9Properties(BaseTransform):
+
+    def __init__(self, properties: Optional[List[str]], prop_norm_df: pd.DataFrame) -> None:
+        self.properties = properties if properties is not None else QM9_PROPERTIES
+        prop_norm_data = torch.tensor(prop_norm_df[properties].values, dtype=torch.float32)
+        self.prop_mean = prop_norm_data[0]
+        self.prop_std = prop_norm_data[1]
+
+    def forward(self, data: Union[Data, HeteroData]) -> Union[Data, HeteroData]:
+        data.y = (data.y - self.prop_mean) / self.prop_std
         return data
 
 
@@ -320,7 +340,14 @@ def create_validation_subset_loaders(validation_dataset, subset_count, batch_siz
     return validation_subsets
 
 
-def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: bool, properties: List[str]) -> QM9:
+def create_qm9_dataset(
+        device: str, 
+        include_hydrogen: bool, 
+        refresh_data_cache: bool, 
+        properties: Optional[List[str]],
+        prop_norm_df: pd.DataFrame,
+    ) -> QM9:
+
     pre_transform_list = [SelectQM9NodeFeatures(features=["atom_type"])]
     if not include_hydrogen:
         pre_transform_list.append(DropQM9Hydrogen())
@@ -334,19 +361,20 @@ def create_qm9_dataset(device: str, include_hydrogen: bool, refresh_data_cache: 
     pre_transform = T.Compose(pre_transform_list)
 
     transform_list = []
+    if properties is not None:
+        transform_list.append(SelectQM9TargetProperties(properties=properties))
+    transform_list.append(NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df))
     transform_list.append(T.ToDevice(device=device))
-    transform = T.Compose([
-        SelectQM9TargetProperties(properties=properties),
-        T.ToDevice(device=device),
-    ])
+    transform = T.Compose(transform_list)
 
     # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
-    dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+    dataset = QM9(root=DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
 
     if refresh_data_cache:
         # remove the processed files and recreate them
         # this might be necessary when the pre_transform or the pre_filter has been updated
         shutil.rmtree(dataset.processed_dir)
-        dataset = QM9(root="./data", pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+        dataset = QM9(root=DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
 
     return dataset
+

@@ -7,6 +7,7 @@ from typing import Dict, Any, Union
 import math
 import functools
 
+import pandas as pd
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
@@ -255,7 +256,7 @@ def evaluate_model(
     train_mol_smiles = set()
     include_hydrogen = hparams["include_hydrogen"]
 
-    smiles_file_path = "./data/qm9_train_smiles.json"
+    smiles_file_path = os.path.join(DATA_ROOT_DIR, "qm9_train_smiles.json")
     try:
         with open(smiles_file_path, "r") as file:
             train_mol_smiles = set(json.load(file))
@@ -359,17 +360,49 @@ def main():
 
     if args.properties is not None:
         properties = args.properties.split(",")
+        for property in properties:
+            if property not in QM9_PROPERTIES:
+                raise ValueError(f"Property {property} does not exist in the QM9 dataset.")
+    elif args.properties == "all":
+        properties = None
     else:
         properties = []
 
+
+    # compute mean and standard deviation of property values for normalization
+    norm_data_file_path = os.path.join(DATA_ROOT_DIR, "qm9_prop_norm_data.csv")
+    try:
+        prop_norm_df = pd.read_csv(norm_data_file_path, index_col=False)
+    except FileNotFoundError:
+        tmp_path = "./tmp"
+        tmp_dataset = QM9(root=tmp_path)
+        # compute statistics on the training set
+        tmp_dataset, _, _ = create_qm9_data_split(dataset=tmp_dataset)
+        y = torch.stack([data.y for data in tqdm(tmp_dataset, "Computing property statistics")])
+        y_mean = y.mean(dim=0)
+        y_std = y.std(dim=0)
+        y_stats = torch.concat([y_mean, y_std], dim=0)
+        
+        prop_norm_df = pd.DataFrame(
+            data=y_stats.numpy(),
+            columns=QM9_PROPERTIES
+        )
+        prop_norm_df.to_csv(norm_data_file_path, index=False)
+    
+        # remove tmp directory
+        shutil.rmtree(tmp_path)
+    
     # create dataset and dataloaders
     dataset = create_qm9_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen, 
         refresh_data_cache=not args.use_cached_dataset,
-        properties=properties
+        properties=properties,
+        prop_norm_df=prop_norm_df
     )
+
     train_dataset, val_dataset, test_dataset = create_qm9_data_split(dataset=dataset)
+
     if args.train_sample_limit is not None:
         train_dataset = train_dataset[:args.train_sample_limit]
     data_loaders = create_dataloaders(
@@ -400,7 +433,7 @@ def main():
     }
 
     # setup model and optimizer
-    graph_vae_model = GraphVAE(hparams=hparams).to(device=device)
+    graph_vae_model = GraphVAE(hparams=hparams, prop_norm_df=prop_norm_df).to(device=device)
     optimizer = torch.optim.Adam(
         graph_vae_model.parameters(),
         lr=hparams["learning_rate"],
