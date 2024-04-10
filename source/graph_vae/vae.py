@@ -37,7 +37,7 @@ class GraphVAE(nn.Module):
                 nn.Linear(67, 67),
                 nn.BatchNorm1d(67),
                 nn.PReLU(),
-                nn.Linear(67, self.num_properties),
+                nn.Linear(67, self.num_properties * 2),
             )
 
 
@@ -91,10 +91,14 @@ class GraphVAE(nn.Module):
 
         if self.num_properties > 0:
             y = self.property_predictor(self.z_to_property_z(z))
+            y_mu = y[:, :self.num_properties]
+            log_sigma = y[:, self.num_properties:]
+            y_sigma = torch.exp(torch.clamp(log_sigma, -20, 30))
         else:
-            y = None
+            y_mu = None
+            y_sigma = None
 
-        return x, mu, sigma, y
+        return x, mu, sigma, y_mu, y_sigma
     
     @staticmethod
     def kl_divergence(mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:

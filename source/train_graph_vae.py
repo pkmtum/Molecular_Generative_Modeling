@@ -10,6 +10,7 @@ import functools
 import pandas as pd
 from tqdm import tqdm
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 import torch_geometric.utils as pyg_utils
@@ -97,6 +98,8 @@ def train_model(
 
     kl_weight_scale = hparams["kl_weight"]
 
+    nll_loss_func = nn.GaussianNLLLoss(full=True)
+
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
 
@@ -118,8 +121,10 @@ def train_model(
             train_elbo = -train_loss
 
             if predict_properties:
-                train_predicted_properties = train_model_ouput[3]
-                train_property_loss = F.mse_loss(train_predicted_properties, train_batch.y)
+                train_pred_y_mu = train_model_ouput[3]
+                train_pred_y_sigma = train_model_ouput[4]
+                train_pred_y_var = train_pred_y_sigma * train_pred_y_sigma
+                train_property_loss = nll_loss_func(train_pred_y_mu, train_batch.y, train_pred_y_var)
                 train_loss += train_property_loss
 
             train_loss.backward()
@@ -154,8 +159,10 @@ def train_model(
                         val_elbo_sum -= val_loss
 
                         if predict_properties:
-                            val_predicted_properties = model_output[3]
-                            val_property_loss = F.mse_loss(val_predicted_properties, val_batch.y)
+                            val_pred_y_mu = model_output[3]
+                            val_pred_y_sigma = model_output[4]
+                            val_pred_y_var = val_pred_y_sigma * val_pred_y_sigma
+                            val_property_loss = nll_loss_func(val_pred_y_mu, val_batch.y, val_pred_y_var)
                             val_property_loss_sum += val_property_loss
 
                             val_loss += val_property_loss
@@ -212,6 +219,8 @@ def evaluate_model(
 
     kl_weight = hparams["kl_weight"]
 
+    nll_loss_func = nn.GaussianNLLLoss(full=True)
+
     # evaluate average reconstruction log-likelihood on validation set
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
@@ -222,8 +231,10 @@ def evaluate_model(
             val_recon, mu, sigma = model_output[:3]
 
             if len(properties) > 0:
-                val_predicted_properties = model_output[3]
-                property_prediction_loss += F.mse_loss(val_predicted_properties, val_batch.y)
+                val_pred_y_mu = model_output[3]
+                val_pred_y_sigma = model_output[4]
+                val_pred_y_var = val_pred_y_sigma * val_pred_y_sigma
+                property_prediction_loss += nll_loss_func(val_pred_y_mu, val_batch.y, val_pred_y_var)
             
             val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
             
@@ -249,7 +260,7 @@ def evaluate_model(
     metrics.update({
         "ELBO": val_elbo_sum / len(val_loader),
         "Log-likelihood": val_log_likelihood_sum / len(val_loader),
-        "Property Prediction MSE": property_prediction_loss / len(val_loader)
+        "Property Prediction Gaussian NLL": property_prediction_loss / len(val_loader)
     })
 
     # decoding quality metrics
