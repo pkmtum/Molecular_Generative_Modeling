@@ -356,7 +356,7 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
-    parser.add_argument("--logdir", type=str, default="graph_vae_dev", help="Name of the Tensorboard logging directory.")
+    parser.add_argument("--logdir", type=str, default="graph_vae_dev_x", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
     args = parser.parse_args()
 
@@ -380,28 +380,7 @@ def main():
         properties = []
 
 
-    # compute mean and standard deviation of property values for normalization
-    norm_data_file_path = os.path.join(DATA_ROOT_DIR, "qm9_prop_norm_data.csv")
-    try:
-        prop_norm_df = pd.read_csv(norm_data_file_path, index_col=False)
-    except FileNotFoundError:
-        tmp_path = "./tmp"
-        tmp_dataset = QM9(root=tmp_path)
-        # compute statistics on the training set
-        tmp_dataset, _, _ = create_qm9_data_split(dataset=tmp_dataset)
-        y = torch.stack([data.y for data in tqdm(tmp_dataset, "Computing property statistics")])
-        y_mean = y.mean(dim=0)
-        y_std = y.std(dim=0)
-        y_stats = torch.concat([y_mean, y_std], dim=0)
-        
-        prop_norm_df = pd.DataFrame(
-            data=y_stats.numpy(),
-            columns=QM9_PROPERTIES
-        )
-        prop_norm_df.to_csv(norm_data_file_path, index=False)
-    
-        # remove tmp directory
-        shutil.rmtree(tmp_path)
+    prop_norm_df = create_or_load_property_norm_df()
     
     # create dataset and dataloaders
     dataset = create_qm9_dataset(

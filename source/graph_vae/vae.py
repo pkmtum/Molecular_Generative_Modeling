@@ -227,10 +227,14 @@ class GraphVAE(nn.Module):
         return z, x
 
 
-    def predict_properties(self, z: torch.Tensor) -> torch.Tensor:
+    def predict_properties(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.num_properties == 0:
             raise ValueError("Model has not been trained with property prediction")
-        return self.property_predictor(z)
+        y = self.property_predictor(self.z_to_property_z(z))
+        y_mu = y[:, :self.num_properties]
+        log_sigma = y[:, self.num_properties:]
+        y_sigma = torch.exp(torch.clamp(log_sigma, -20, 30))
+        return y_mu, y_sigma
 
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:

@@ -17,6 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import Draw
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 
 # global constants
@@ -378,3 +379,29 @@ def create_qm9_dataset(
 
     return dataset
 
+
+def create_or_load_property_norm_df() -> pd.DataFrame:
+    # compute mean and standard deviation of property values for normalization
+    norm_data_file_path = os.path.join(DATA_ROOT_DIR, "qm9_prop_norm_data.csv")
+    try:
+        prop_norm_df = pd.read_csv(norm_data_file_path, index_col=False)
+    except FileNotFoundError:
+        tmp_path = "./tmp"
+        tmp_dataset = QM9(root=tmp_path)
+        # compute statistics on the training set
+        tmp_dataset, _, _ = create_qm9_data_split(dataset=tmp_dataset)
+        y = torch.stack([data.y for data in tqdm(tmp_dataset, "Computing property statistics")])
+        y_mean = y.mean(dim=0)
+        y_std = y.std(dim=0)
+        y_stats = torch.concat([y_mean, y_std], dim=0)
+        
+        prop_norm_df = pd.DataFrame(
+            data=y_stats.numpy(),
+            columns=QM9_PROPERTIES
+        )
+        prop_norm_df.to_csv(norm_data_file_path, index=False)
+    
+        # remove tmp directory
+        shutil.rmtree(tmp_path)
+
+    return prop_norm_df
