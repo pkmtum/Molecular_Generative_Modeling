@@ -58,6 +58,7 @@ def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteratio
     x = min(max(iteration - start_iteration, 0) / length, 1)
     return 0.5 * (1 + math.cos((1 + x) * math.pi))
 
+
 def train_model(
         graph_vae_model: GraphVAE,
         optimizer: torch.optim.Optimizer,
