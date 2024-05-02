@@ -69,6 +69,9 @@ class GraphVAE(nn.Module):
 
     def denormalize_properties(self, y):
         return y * self.prop_std + self.prop_mean
+    
+    def denormalize_properties_std(self, y_std):
+        return y_std * self.prop_std
 
     def _sample_with_reparameterization(self, mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         std_norm = torch.randn_like(mu)

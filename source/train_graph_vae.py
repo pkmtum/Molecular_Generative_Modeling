@@ -100,6 +100,8 @@ def train_model(
     kl_weight_scale = hparams["kl_weight"]
 
     nll_loss_func = nn.GaussianNLLLoss(full=True)
+    best_val_loss = 100000
+    saved_best_model = False
 
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
@@ -171,6 +173,11 @@ def train_model(
                         val_loss_sum += val_loss
                         
                 val_loss = val_loss_sum / batches_per_validation
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    saved_best_model = False
+
                 val_elbo = val_elbo_sum / batches_per_validation
                 tb_writer.add_scalars("Loss", {"Validation": val_loss.item()}, iteration)
                 tb_writer.add_scalars("ELBO", {"Validation": val_elbo.item()}, iteration)
@@ -182,15 +189,17 @@ def train_model(
                 
                 graph_vae_model.train()
 
-        torch.save({
-                "epoch": epoch,
-                "model_state_dict": graph_vae_model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "hparams": hparams,
-            },
-            out_checkpoint
-        )
-        print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
+        if not saved_best_model:
+            torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": graph_vae_model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "hparams": hparams,
+                },
+                out_checkpoint
+            )
+            print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
+            saved_best_model = True
 
     return out_checkpoint
 
@@ -466,6 +475,8 @@ def main():
         # thus we need a checkpoint to load from
         raise ValueError("Missing trainng checkpoint!")
 
+    # load best model
+    graph_vae_model = GraphVAE.from_pretrained(out_checkpoint_path).to(device)
     # evaluate the model
     evaluate_model(
         graph_vae_model=graph_vae_model,
