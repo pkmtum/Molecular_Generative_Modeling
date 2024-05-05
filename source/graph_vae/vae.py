@@ -27,8 +27,8 @@ class GraphVAE(nn.Module):
         self.num_edge_features = hparams["num_edge_features"]
         self.property_z_size = hparams.get("property_latent_dim", self.latent_dim)
 
-        properties = hparams["properties"]
-        self.num_properties = len(properties)
+        self.properties = hparams["properties"]
+        self.num_properties = len(self.properties)
         if self.num_properties > 0:
             self.property_predictor = nn.Sequential(
                 nn.Linear(self.property_z_size, 67),
@@ -48,7 +48,7 @@ class GraphVAE(nn.Module):
 
         # load normalization data        
         if prop_norm_df is not None:
-            prop_norm_data = torch.tensor(prop_norm_df[properties].values, dtype=torch.float32)
+            prop_norm_data = torch.tensor(prop_norm_df[self.properties].values, dtype=torch.float32)
             prop_mean = prop_norm_data[0]
             prop_std = prop_norm_data[1]
         else:

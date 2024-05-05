@@ -1,0 +1,3 @@
+#!/bin/bash
+python train_graph_vae.py --properties=homo,lumo,r2 --use_cached_dataset --epochs=1000 --logdir=graph_vae_long --kl_schedule=cyclical
+python train_graph_vae.py --properties=homo,lumo,r2 --use_cached_dataset --epochs=1000 --logdir=graph_vae_long --kl_schedule=cyclical --property_latent_dim=16

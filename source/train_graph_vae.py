@@ -235,6 +235,7 @@ def evaluate_model(
     val_elbo_sum = 0
     val_log_likelihood_sum = 0
     property_prediction_loss = 0
+    property_mae_list = []
     with torch.no_grad():
         for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
             model_output = graph_vae_model(val_batch)
@@ -245,6 +246,11 @@ def evaluate_model(
                 val_pred_y_sigma = model_output[4]
                 val_pred_y_var = val_pred_y_sigma * val_pred_y_sigma
                 property_prediction_loss += nll_loss_func(val_pred_y_mu, val_batch.y, val_pred_y_var)
+
+                denorm_target_properties = graph_vae_model.denormalize_properties(val_batch.y)
+                denorm_pred_properties = graph_vae_model.denormalize_properties(val_pred_y_mu)
+                property_mae = (denorm_pred_properties - denorm_target_properties).abs()
+                property_mae_list.append(property_mae)
             
             val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
             
@@ -270,8 +276,10 @@ def evaluate_model(
     metrics.update({
         "ELBO": val_elbo_sum / len(val_loader),
         "Log-likelihood": val_log_likelihood_sum / len(val_loader),
-        "Property Prediction Gaussian NLL": property_prediction_loss / len(val_loader)
+        "Property Prediction Gaussian NLL": property_prediction_loss / len(val_loader),
     })
+    # this is technically a metric but only hparams can be strings
+    log_hparams["Property Unnormalized MAE"] = ", ".join([f"{x:.4f}" for x in torch.cat(property_mae_list, dim=0).mean(0).tolist()])
 
     # decoding quality metrics
     train_mol_smiles = set()
