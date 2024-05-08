@@ -195,15 +195,15 @@ def train_model(
             val_recon_loss = val_recon_loss_sum.item() / len(val_loader)
             val_kl_divergence = val_kl_divergence_sum.item() / len(val_loader)
 
-            tb_writer.add_scalars("Loss", {"Validation": val_loss}, iteration)
-            tb_writer.add_scalars("ELBO", {"Validation": val_elbo}, iteration)
-            tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss}, iteration)
-            tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence}, iteration)
+            tb_writer.add_scalars("Loss", {"Validation": val_loss}, epoch)
+            tb_writer.add_scalars("ELBO", {"Validation": val_elbo}, epoch)
+            tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss}, epoch)
+            tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence}, epoch)
             if predict_properties:
                 val_property_loss = val_property_loss_sum.item() / len(val_loader)
-                tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss}, iteration)
+                tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss}, epoch)
                 val_property_std = val_mean_property_std_sum.item() / len(val_loader)
-                tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std}, iteration)
+                tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std}, epoch)
 
 
         graph_vae_model.train()
@@ -219,7 +219,6 @@ def train_model(
                 out_checkpoint
             )
             print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
-            saved_best_model = True
 
     return out_checkpoint
 
