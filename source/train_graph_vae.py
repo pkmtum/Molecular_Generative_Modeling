@@ -106,6 +106,13 @@ def train_model(
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
 
+        train_loss_sum = 0
+        train_elbo_sum = 0
+        train_recon_loss_sum = 0
+        train_kl_divergence_sum = 0
+        train_property_loss_sum = 0
+        train_mean_property_std_sum = 0
+
         for batch_index, train_batch in enumerate(tqdm(train_loader,  desc=f"Epoch {epoch + 1} Training")):
             optimizer.zero_grad()
 
@@ -133,16 +140,17 @@ def train_model(
                 train_mean_property_std = train_pred_y_sigma.mean()
 
             train_loss.backward()
-            optimizer.step()        
+            optimizer.step()    
 
-            tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
-            tb_writer.add_scalars("ELBO", {"Training": train_elbo.item()}, iteration)
-            tb_writer.add_scalars("Reconstruction Loss", {"Training": train_recon_loss.item()}, iteration)
-            tb_writer.add_scalar("KL Weight", kl_weight, iteration)
-            tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence.item()}, iteration)
+            train_loss_sum += train_loss.item()
+            train_elbo_sum += train_elbo.item()
+            train_recon_loss_sum += train_recon_loss.item()
+            train_kl_divergence_sum += train_kl_divergence.item()
             if predict_properties:
-                tb_writer.add_scalars("Property Regression Loss", {"Training": train_property_loss.item()}, iteration)
-                tb_writer.add_scalars("Mean Property Std", {"Training": train_mean_property_std.item()}, iteration)
+                train_property_loss_sum += train_property_loss.item()
+                train_mean_property_std_sum += train_mean_property_std.item()
+
+            tb_writer.add_scalar("KL Weight", kl_weight, iteration)
             
             if (iteration + 1) % validation_interval == 0 or iteration == 0:
                 graph_vae_model.eval()
@@ -196,6 +204,19 @@ def train_model(
                     tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std.item()}, iteration)
                 
                 graph_vae_model.train()
+
+        # tensorboard logging
+        tb_writer.add_scalars("Loss", {"Training": train_loss_sum / len(train_loader)}, epoch)
+        tb_writer.add_scalars("ELBO", {"Training": train_elbo_sum / len(train_loader)}, epoch)
+        tb_writer.add_scalars("Reconstruction Loss", {"Training": train_recon_loss_sum / len(train_loader)}, epoch)
+        tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence_sum / len(train_loader)}, epoch)
+        if predict_properties:
+            tb_writer.add_scalars("Property Regression Loss", {"Training": train_property_loss_sum / len(train_loader)}, epoch)
+            tb_writer.add_scalars("Mean Property Std", {"Training": train_mean_property_std_sum / len(train_loader)}, epoch)
+
+        
+        # TODO: add validation
+
 
         if not saved_best_model:
             torch.save({
