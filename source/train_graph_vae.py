@@ -130,6 +130,8 @@ def train_model(
                 train_property_loss = nll_loss_func(train_pred_y_mu, train_batch.y, train_pred_y_var)
                 train_loss += train_property_loss
 
+                train_mean_property_std = train_pred_y_sigma.mean()
+
             train_loss.backward()
             optimizer.step()        
 
@@ -140,12 +142,14 @@ def train_model(
             tb_writer.add_scalars("KL Divergence", {"Training": train_kl_divergence.item()}, iteration)
             if predict_properties:
                 tb_writer.add_scalars("Property Regression Loss", {"Training": train_property_loss.item()}, iteration)
+                tb_writer.add_scalars("Mean Property Std", {"Training": train_mean_property_std.item()}, iteration)
             
             if (iteration + 1) % validation_interval == 0 or iteration == 0:
                 graph_vae_model.eval()
                 val_loss_sum = 0
                 val_elbo_sum = 0
                 val_property_loss_sum = 0
+                val_mean_property_std_sum = 0
 
                 with torch.no_grad():
                     for _ in range(batches_per_validation):
@@ -169,6 +173,8 @@ def train_model(
                             val_property_loss_sum += val_property_loss
 
                             val_loss += val_property_loss
+
+                            val_mean_property_std_sum += val_pred_y_sigma.mean()
                             
                         val_loss_sum += val_loss
                         
@@ -186,6 +192,8 @@ def train_model(
                 if predict_properties:
                     val_property_loss = val_property_loss_sum / batches_per_validation
                     tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss.item()}, iteration)
+                    val_property_std = val_mean_property_std_sum / batches_per_validation
+                    tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std.item()}, iteration)
                 
                 graph_vae_model.train()
 
@@ -236,6 +244,7 @@ def evaluate_model(
     val_log_likelihood_sum = 0
     property_prediction_loss = 0
     property_mae_list = []
+    property_std_list = []
     with torch.no_grad():
         for val_index, val_batch in enumerate(tqdm(val_loader, desc="Evaluating Reconstruction Performance")):
             model_output = graph_vae_model(val_batch)
@@ -251,6 +260,9 @@ def evaluate_model(
                 denorm_pred_properties = graph_vae_model.denormalize_properties(val_pred_y_mu)
                 property_mae = (denorm_pred_properties - denorm_target_properties).abs()
                 property_mae_list.append(property_mae)
+
+                denorm_property_std = graph_vae_model.denormalize_properties_std(val_pred_y_sigma)
+                property_std_list.append(denorm_property_std)
             
             val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
             
@@ -279,7 +291,19 @@ def evaluate_model(
         "Property Prediction Gaussian NLL": property_prediction_loss / len(val_loader),
     })
     # this is technically a metric but only hparams can be strings
-    log_hparams["Property Unnormalized MAE"] = ", ".join([f"{x:.4f}" for x in torch.cat(property_mae_list, dim=0).mean(0).tolist()])
+    if len(properties) > 0:
+        log_hparams["Property Unnormalized MAE"] = (
+            ", ".join([f"{x:.4f}" for x in torch.cat(property_mae_list, dim=0).mean(0).tolist()])
+        )
+    else:
+        log_hparams["Property Unnormalized MAE"] = ""
+
+    if len(properties) > 0:
+        log_hparams["Property Unnormalized Std"] = (
+            ", ".join([f"{x:.4f}" for x in torch.cat(property_std_list, dim=0).mean(0).tolist()])
+        )
+    else:
+        log_hparams["Property Unnormalized Std"] = ""
 
     # decoding quality metrics
     train_mol_smiles = set()
@@ -376,6 +400,7 @@ def main():
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
     parser.add_argument("--logdir", type=str, default="graph_vae_dev_x", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
+    parser.add_argument("--prop_net_hidden_dim", type=int, default=100, help="Number of neurons in the hidden layers of the property predictor.")
     args = parser.parse_args()
 
     if args.property_latent_dim is None:
@@ -383,7 +408,7 @@ def main():
     else:
         property_latent_dim = args.property_latent_dim
 
-    # --properties=homo,lumo
+    # --properties=homo,lumo,r2
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -438,6 +463,7 @@ def main():
         "properties": properties,
         "kl_weight": args.kl_weight,
         "property_latent_dim": property_latent_dim,
+        "prop_net_hidden_dim": args.prop_net_hidden_dim
     }
 
     # setup model and optimizer

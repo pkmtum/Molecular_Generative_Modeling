@@ -29,17 +29,17 @@ class GraphVAE(nn.Module):
 
         self.properties = hparams["properties"]
         self.num_properties = len(self.properties)
+        property_predictor_hidden_dim = hparams.get("prop_net_hidden_dim", 67)
         if self.num_properties > 0:
             self.property_predictor = nn.Sequential(
-                nn.Linear(self.property_z_size, 67),
-                nn.BatchNorm1d(67),
+                nn.Linear(self.property_z_size, property_predictor_hidden_dim),
+                nn.BatchNorm1d(property_predictor_hidden_dim),
                 nn.PReLU(),
-                nn.Linear(67, 67),
-                nn.BatchNorm1d(67),
+                nn.Linear(property_predictor_hidden_dim, property_predictor_hidden_dim),
+                nn.BatchNorm1d(property_predictor_hidden_dim),
                 nn.PReLU(),
-                nn.Linear(67, self.num_properties * 2),
+                nn.Linear(property_predictor_hidden_dim, self.num_properties * 2),
             )
-
 
         rows, cols = torch.triu_indices(self.max_num_nodes, self.max_num_nodes)
         self.diag_triu_mask = rows == cols
@@ -66,6 +66,9 @@ class GraphVAE(nn.Module):
         graph_vae_model = GraphVAE(hparams=checkpoint["hparams"])
         graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
         return graph_vae_model
+    
+    def normalize_properties(self, y):
+        return (y - self.prop_mean) / self.prop_std
 
     def denormalize_properties(self, y):
         return y * self.prop_std + self.prop_mean
