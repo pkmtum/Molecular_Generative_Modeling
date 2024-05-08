@@ -77,11 +77,6 @@ def train_model(
     properties = hparams["properties"]
     predict_properties = len(properties) > 0
 
-    # get dataloaders
-    val_loader_iterator = itertools.cycle(iter(val_loader))
-    validation_interval = 100
-    batches_per_validation = 2
-
     kl_schedule_type = hparams["kl_schedule"]
     kl_schedule_func = None
     if kl_schedule_type == "constant":
@@ -101,7 +96,6 @@ def train_model(
 
     nll_loss_func = nn.GaussianNLLLoss(full=True)
     best_val_loss = 100000
-    saved_best_model = False
 
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
@@ -151,59 +145,7 @@ def train_model(
                 train_mean_property_std_sum += train_mean_property_std.item()
 
             tb_writer.add_scalar("KL Weight", kl_weight, iteration)
-            
-            if (iteration + 1) % validation_interval == 0 or iteration == 0:
-                graph_vae_model.eval()
-                val_loss_sum = 0
-                val_elbo_sum = 0
-                val_property_loss_sum = 0
-                val_mean_property_std_sum = 0
-
-                with torch.no_grad():
-                    for _ in range(batches_per_validation):
-                        val_batch = next(val_loader_iterator)
-                        model_output = graph_vae_model(val_batch)
-                        val_recon, mu, sigma = model_output[:3]
-
-                        val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
-
-                        val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-                        val_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
-                        val_loss = val_recon_loss + kl_weight * val_kl_divergence
-
-                        val_elbo_sum -= val_loss
-
-                        if predict_properties:
-                            val_pred_y_mu = model_output[3]
-                            val_pred_y_sigma = model_output[4]
-                            val_pred_y_var = val_pred_y_sigma * val_pred_y_sigma
-                            val_property_loss = nll_loss_func(val_pred_y_mu, val_batch.y, val_pred_y_var)
-                            val_property_loss_sum += val_property_loss
-
-                            val_loss += val_property_loss
-
-                            val_mean_property_std_sum += val_pred_y_sigma.mean()
-                            
-                        val_loss_sum += val_loss
-                        
-                val_loss = val_loss_sum / batches_per_validation
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    saved_best_model = False
-
-                val_elbo = val_elbo_sum / batches_per_validation
-                tb_writer.add_scalars("Loss", {"Validation": val_loss.item()}, iteration)
-                tb_writer.add_scalars("ELBO", {"Validation": val_elbo.item()}, iteration)
-                tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss.item()}, iteration)
-                tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence.item()}, iteration)
-                if predict_properties:
-                    val_property_loss = val_property_loss_sum / batches_per_validation
-                    tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss.item()}, iteration)
-                    val_property_std = val_mean_property_std_sum / batches_per_validation
-                    tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std.item()}, iteration)
                 
-                graph_vae_model.train()
 
         # tensorboard logging
         tb_writer.add_scalars("Loss", {"Training": train_loss_sum / len(train_loader)}, epoch)
@@ -214,11 +156,60 @@ def train_model(
             tb_writer.add_scalars("Property Regression Loss", {"Training": train_property_loss_sum / len(train_loader)}, epoch)
             tb_writer.add_scalars("Mean Property Std", {"Training": train_mean_property_std_sum / len(train_loader)}, epoch)
 
-        
-        # TODO: add validation
+        # validation
+        graph_vae_model.eval()
+        val_loss_sum = 0
+        val_elbo_sum = 0
+        val_recon_loss_sum = 0
+        val_kl_divergence_sum = 0
+        val_property_loss_sum = 0
+        val_mean_property_std_sum = 0
+        with torch.no_grad():
+            for val_batch in tqdm(val_loader, desc="Validation"):
+                model_output = graph_vae_model(val_batch)
+                val_recon, mu, sigma = model_output[:3]
+
+                val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
+
+                val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
+                val_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+                val_loss = val_recon_loss + kl_weight * val_kl_divergence
+
+                val_elbo_sum -= val_loss
+                val_recon_loss_sum += val_recon_loss
+                val_kl_divergence_sum += val_kl_divergence
+
+                if predict_properties:
+                    val_pred_y_mu = model_output[3]
+                    val_pred_y_sigma = model_output[4]
+                    val_pred_y_var = val_pred_y_sigma * val_pred_y_sigma
+                    val_property_loss = nll_loss_func(val_pred_y_mu, val_batch.y, val_pred_y_var)
+                    val_property_loss_sum += val_property_loss
+                    val_loss += val_property_loss
+                    val_mean_property_std_sum += val_pred_y_sigma.mean()
+                    
+                val_loss_sum += val_loss
+                    
+            val_loss = val_loss_sum.item() / len(val_loader)
+            val_elbo = val_elbo_sum.item() / len(val_loader)
+            val_recon_loss = val_recon_loss_sum.item() / len(val_loader)
+            val_kl_divergence = val_kl_divergence_sum.item() / len(val_loader)
+
+            tb_writer.add_scalars("Loss", {"Validation": val_loss}, iteration)
+            tb_writer.add_scalars("ELBO", {"Validation": val_elbo}, iteration)
+            tb_writer.add_scalars("Reconstruction Loss", {"Validation": val_recon_loss}, iteration)
+            tb_writer.add_scalars("KL Divergence", {"Validation": val_kl_divergence}, iteration)
+            if predict_properties:
+                val_property_loss = val_property_loss_sum.item() / len(val_loader)
+                tb_writer.add_scalars("Property Regression Loss", {"Validation": val_property_loss}, iteration)
+                val_property_std = val_mean_property_std_sum.item() / len(val_loader)
+                tb_writer.add_scalars("Mean Property Std", {"Validation": val_property_std}, iteration)
 
 
-        if not saved_best_model:
+        graph_vae_model.train()
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             torch.save({
                     "epoch": epoch,
                     "model_state_dict": graph_vae_model.state_dict(),
