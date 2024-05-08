@@ -94,8 +94,7 @@ def train_model(
 
     kl_weight_scale = hparams["kl_weight"]
 
-    nll_loss_func = nn.GaussianNLLLoss(full=True)
-    best_val_loss = 100000
+    nll_loss_func = nn.GaussianNLLLoss(full=False)
 
     for epoch in range(start_epoch, start_epoch + epochs):
         graph_vae_model.train()
@@ -189,7 +188,7 @@ def train_model(
                     val_mean_property_std_sum += val_pred_y_sigma.mean()
                     
                 val_loss_sum += val_loss
-                    
+
             val_loss = val_loss_sum.item() / len(val_loader)
             val_elbo = val_elbo_sum.item() / len(val_loader)
             val_recon_loss = val_recon_loss_sum.item() / len(val_loader)
@@ -208,17 +207,15 @@ def train_model(
 
         graph_vae_model.train()
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": graph_vae_model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "hparams": hparams,
-                },
-                out_checkpoint
-            )
-            print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
+        torch.save({
+                "epoch": epoch,
+                "model_state_dict": graph_vae_model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "hparams": hparams,
+            },
+            out_checkpoint
+        )
+        print(f"Saved GraphVAE training checkpoint to {out_checkpoint}")
 
     return out_checkpoint
 
