@@ -400,7 +400,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--latent_dim", type=int, default=128, help="Number of dimensions of the latent space.")
-    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="monotonic", help="Type of annealing schedule to use for the weight of the KL divergence.")
+    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
     parser.add_argument("--stochastic_decoding", action="store_true", help="Decode molecules stochastically.")
     parser.add_argument("--max_decode_attempts", type=int, default=10, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
@@ -408,7 +408,8 @@ def main():
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
     parser.add_argument("--logdir", type=str, default="graph_vae_dev_x", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
-    parser.add_argument("--prop_net_hidden_dim", type=int, default=100, help="Number of neurons in the hidden layers of the property predictor.")
+    parser.add_argument("--prop_net_hidden_dim", type=int, default=67, help="Number of neurons in the hidden layers of the property predictor.")
+    parser.add_argument("--property_model_dropout", type=float, default=0.15, help="Dropout probability in the property prediction model.")
     args = parser.parse_args()
 
     if args.property_latent_dim is None:
@@ -471,7 +472,8 @@ def main():
         "properties": properties,
         "kl_weight": args.kl_weight,
         "property_latent_dim": property_latent_dim,
-        "prop_net_hidden_dim": args.prop_net_hidden_dim
+        "prop_net_hidden_dim": args.prop_net_hidden_dim,
+        "property_model_dropout": args.property_model_dropout,
     }
 
     # setup model and optimizer

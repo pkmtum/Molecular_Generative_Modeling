@@ -26,6 +26,7 @@ class GraphVAE(nn.Module):
         self.num_node_features = hparams["num_node_features"]
         self.num_edge_features = hparams["num_edge_features"]
         self.property_z_size = hparams.get("property_latent_dim", self.latent_dim)
+        dropout_p = hparams.get("property_model_dropout", 0)
 
         self.properties = hparams["properties"]
         self.num_properties = len(self.properties)
@@ -35,9 +36,11 @@ class GraphVAE(nn.Module):
                 nn.Linear(self.property_z_size, property_predictor_hidden_dim),
                 nn.BatchNorm1d(property_predictor_hidden_dim),
                 nn.PReLU(),
+                nn.Dropout(p=dropout_p),
                 nn.Linear(property_predictor_hidden_dim, property_predictor_hidden_dim),
                 nn.BatchNorm1d(property_predictor_hidden_dim),
                 nn.PReLU(),
+                nn.Dropout(p=dropout_p),
                 nn.Linear(property_predictor_hidden_dim, self.num_properties * 2),
             )
 
