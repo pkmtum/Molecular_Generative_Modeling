@@ -22,6 +22,8 @@ from tqdm import tqdm
 
 # global constants
 DATA_ROOT_DIR = "./data"
+GRAPH_VAE_DATA_ROOT_DIR = os.path.join(DATA_ROOT_DIR, "graph_vae")
+MIXTURE_VAE_DATA_ROOT_DIR = os.path.join(DATA_ROOT_DIR, "mixture_vae")
 QM9_PROPERTIES = [
     "mu", "alpha", "homo", "lumo", "gap", "r2",
     "zpve", "U0", "U", "H", "G", "Cv", "U0_atom",
@@ -290,23 +292,24 @@ def graph_to_mol(data: Data, includes_h: bool, validate: bool):
         atom = Chem.Atom(atomic_number)
         mol.AddAtom(atom)
 
-    # Create set of undirected bonds
-    undirected_bonds = set()
-    for edge_indices, edge_feature in zip(data.edge_index.t(), data.edge_attr):
-        start_atom, end_atom = edge_indices
-        bond_type_index = torch.argmax(edge_feature).item()
-        bond = tuple(sorted((start_atom.item(), end_atom.item())) + [bond_type_index])
-        undirected_bonds.add(bond)
+    if data.edge_index is not None:
+        # Create set of undirected bonds
+        undirected_bonds = set()
+        for edge_indices, edge_feature in zip(data.edge_index.t(), data.edge_attr):
+            start_atom, end_atom = edge_indices
+            bond_type_index = torch.argmax(edge_feature).item()
+            bond = tuple(sorted((start_atom.item(), end_atom.item())) + [bond_type_index])
+            undirected_bonds.add(bond)
 
-    bond_type_map = {
-        0: Chem.BondType.SINGLE,
-        1: Chem.BondType.DOUBLE,
-        2: Chem.BondType.TRIPLE,
-        3: Chem.BondType.AROMATIC
-    }
-    # Add bonds
-    for start_atom, end_atom, bond_type_index in undirected_bonds:
-        mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
+        bond_type_map = {
+            0: Chem.BondType.SINGLE,
+            1: Chem.BondType.DOUBLE,
+            2: Chem.BondType.TRIPLE,
+            3: Chem.BondType.AROMATIC
+        }
+        # Add bonds
+        for start_atom, end_atom, bond_type_index in undirected_bonds:
+            mol.AddBond(int(start_atom), int(end_atom), bond_type_map[bond_type_index])
 
     if validate:
         # Check if the molecule is chemically valid
@@ -316,7 +319,7 @@ def graph_to_mol(data: Data, includes_h: bool, validate: bool):
     mol = mol.GetMol()
     return mol
 
-def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.tensor:
+def molecule_graph_data_to_image(data: Data, includes_h: bool) -> torch.Tensor:
     mol = graph_to_mol(data=data, includes_h=includes_h, validate=False)
     return mol_to_image_tensor(mol)
 
@@ -341,7 +344,7 @@ def create_validation_subset_loaders(validation_dataset, subset_count, batch_siz
     return validation_subsets
 
 
-def create_qm9_dataset(
+def create_qm9_graph_vae_dataset(
         device: str, 
         include_hydrogen: bool, 
         refresh_data_cache: bool, 
@@ -363,19 +366,51 @@ def create_qm9_dataset(
 
     transform_list = []
     if properties is not None:
-        transform_list.append(SelectQM9TargetProperties(properties=properties))
-    transform_list.append(NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df))
+        transform_list.extend([
+            SelectQM9TargetProperties(properties=properties),
+            NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df)
+        ])
     transform_list.append(T.ToDevice(device=device))
     transform = T.Compose(transform_list)
 
     # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
-    dataset = QM9(root=DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+    dataset = QM9(root=GRAPH_VAE_DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
 
     if refresh_data_cache:
         # remove the processed files and recreate them
         # this might be necessary when the pre_transform or the pre_filter has been updated
         shutil.rmtree(dataset.processed_dir)
-        dataset = QM9(root=DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+        dataset = QM9(root=GRAPH_VAE_DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+
+    return dataset
+
+
+def create_qm9_mixture_vae_dataset(
+        device: str, 
+        refresh_data_cache: bool, 
+        properties: Optional[List[str]],
+        prop_norm_df: pd.DataFrame,
+    ) -> QM9:
+
+    pre_transform = SelectQM9NodeFeatures(features=["atom_type"])
+
+    transform_list = []
+    if properties is not None:
+        transform_list.extend([
+            SelectQM9TargetProperties(properties=properties),
+            NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df)
+        ])
+    transform_list.append(T.ToDevice(device=device))
+    transform = T.Compose(transform_list)
+
+    # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
+    dataset = QM9(root=MIXTURE_VAE_DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
+
+    if refresh_data_cache:
+        # remove the processed files and recreate them
+        # this might be necessary when the pre_transform or the pre_filter has been updated
+        shutil.rmtree(dataset.processed_dir)
+        dataset = QM9(root=MIXTURE_VAE_DATA_ROOT_DIR, pre_transform=pre_transform, pre_filter=qm9_pre_filter, transform=transform)
 
     return dataset
 

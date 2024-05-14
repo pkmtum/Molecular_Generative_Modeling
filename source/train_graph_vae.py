@@ -317,7 +317,7 @@ def evaluate_model(
     train_mol_smiles = set()
     include_hydrogen = hparams["include_hydrogen"]
 
-    smiles_file_path = os.path.join(DATA_ROOT_DIR, "qm9_train_smiles.json")
+    smiles_file_path = os.path.join(GRAPH_VAE_DATA_ROOT_DIR, "qm9_train_smiles.json")
     try:
         with open(smiles_file_path, "r") as file:
             train_mol_smiles = set(json.load(file))
@@ -435,7 +435,7 @@ def main():
     prop_norm_df = create_or_load_property_norm_df()
     
     # create dataset and dataloaders
-    dataset = create_qm9_dataset(
+    dataset = create_qm9_graph_vae_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen, 
         refresh_data_cache=not args.use_cached_dataset,
