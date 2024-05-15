@@ -386,7 +386,8 @@ def create_qm9_graph_vae_dataset(
 
 
 def create_qm9_mixture_vae_dataset(
-        device: str, 
+        device: str,
+        include_hydrogen: bool,
         refresh_data_cache: bool, 
         properties: Optional[List[str]],
         prop_norm_df: pd.DataFrame,
@@ -395,6 +396,8 @@ def create_qm9_mixture_vae_dataset(
     pre_transform = SelectQM9NodeFeatures(features=["atom_type"])
 
     transform_list = []
+    if not include_hydrogen:
+        transform_list.append(DropQM9Hydrogen())
     if properties is not None:
         transform_list.extend([
             SelectQM9TargetProperties(properties=properties),
