@@ -2,6 +2,7 @@ from typing import List, Union, Tuple, Optional
 import os
 import math
 import shutil
+import itertools
 
 import torch
 from torch.utils.data import random_split
@@ -385,6 +386,43 @@ def create_qm9_graph_vae_dataset(
     return dataset
 
 
+class AddNullEdges(BaseTransform):
+    """ 
+    Add null edges to the graph.
+    """
+
+    def __init__(self) -> None:
+        self.edge_indices = []
+        for N in range(2, 50):
+            self.edge_indices.append(
+                torch.tensor(list(itertools.combinations(range(N), 2))).t()
+            )
+
+    def forward(
+        self,
+        data: Union[Data, HeteroData],
+    ) -> Union[Data, HeteroData]:
+        num_nodes = data.x.shape[0]
+        edge_index_full = self.edge_indices[num_nodes - 2]
+
+        # Initialize full edge attributes with null category
+        edge_attr_full = torch.zeros((edge_index_full.shape[1], 5))
+        edge_attr_full[:, -1] = 1
+
+        existing_edges = set(map(tuple, data.edge_index.t().tolist()))
+        for i, edge in enumerate(edge_index_full.t()):
+            edge_tuple = tuple(edge.tolist())
+            if edge_tuple in existing_edges:
+                index = list(existing_edges).index(edge_tuple)
+                edge_attr_full[i, :-1] = data.edge_attr[index]
+                edge_attr_full[i, -1] = 0
+
+        data.edge_index_full = edge_index_full
+        data.edge_attr_full = edge_attr_full
+
+        return data
+
+
 def create_qm9_mixture_vae_dataset(
         device: str,
         include_hydrogen: bool,
@@ -403,7 +441,10 @@ def create_qm9_mixture_vae_dataset(
             SelectQM9TargetProperties(properties=properties),
             NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df)
         ])
-    transform_list.append(T.ToDevice(device=device))
+    transform_list.extend([
+        AddNullEdges(),
+        T.ToDevice(device=device)
+    ])
     transform = T.Compose(transform_list)
 
     # note: when the pre_filter or pre_transform is changed, delete the data/processed folder to update the dataset
