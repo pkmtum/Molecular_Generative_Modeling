@@ -90,6 +90,7 @@ def train_model(
                 reduction="sum",
             )
             train_loss /= len(train_batch)
+            train_log_likelihood = train_loss
 
             # eta KL-Divergence
             eta_kl_divergence = kl_divergence_gaussian(
@@ -139,10 +140,7 @@ def train_model(
 
             # log to tensorboard
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
-            tb_writer.add_scalars("Log-Likelihood", {"Training"})
-            # TODO: log to tensorboard
-            # - loss
-            # - log-likelihood
+            tb_writer.add_scalars("Log-Likelihood", {"Training": train_log_likelihood.item()}, iteration)
 
 
 def main():
