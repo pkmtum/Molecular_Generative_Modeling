@@ -115,7 +115,7 @@ def train_model(
             
             train_model_ouput = graph_vae_model(train_batch)
             train_recon, mu, sigma = train_model_ouput[:3]
-
+ 
             train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
 
             train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
