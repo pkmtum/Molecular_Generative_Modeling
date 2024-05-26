@@ -18,6 +18,7 @@ class MixtureModelDecoder(nn.Module):
         z_dim = hparams["z_dim"]
         num_atom_types = hparams["num_atom_types"]
         num_bond_types = hparams["num_bond_types"] + 1  # +1 for non-existent bonds
+        dropout_p = hparams["dropout"]
 
         # model parameters
         self.eta_mu = nn.Parameter(torch.randn(1, self.eta_dim))
@@ -35,19 +36,31 @@ class MixtureModelDecoder(nn.Module):
 
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
         self.cluster_log_sigmas = nn.Parameter(torch.zeros(1, self.num_clusters, z_dim))
+        atom_type_mlp_hidden_dim = hparams["atom_type_mlp_hidden_dim"]
         self.atom_classifier = nn.Sequential(
-            nn.Linear(z_dim, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(z_dim, atom_type_mlp_hidden_dim),
+            nn.BatchNorm1d(atom_type_mlp_hidden_dim),
             nn.PReLU(),
-            nn.Linear(256, num_atom_types)
+            nn.Dropout(dropout_p),
+            nn.Linear(atom_type_mlp_hidden_dim, atom_type_mlp_hidden_dim),
+            nn.BatchNorm1d(atom_type_mlp_hidden_dim),
+            nn.PReLU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(atom_type_mlp_hidden_dim, num_atom_types)
         )
         bond_type_mlp_hidden_dim = hparams["bond_type_mlp_hidden_dim"]
         if bond_type_mlp_hidden_dim:
             self.bond_matrix = nn.Parameter(torch.randn(1, z_dim, z_dim, z_dim))
             self.bond_type_mlp = nn.Sequential(
+                nn.PReLU(),
                 nn.Linear(z_dim, bond_type_mlp_hidden_dim),
                 nn.BatchNorm1d(bond_type_mlp_hidden_dim),
                 nn.PReLU(),
+                nn.Dropout(dropout_p),
+                nn.Linear(bond_type_mlp_hidden_dim, bond_type_mlp_hidden_dim),
+                nn.BatchNorm1d(bond_type_mlp_hidden_dim),
+                nn.PReLU(),
+                nn.Dropout(dropout_p),
                 nn.Linear(bond_type_mlp_hidden_dim, num_bond_types)
             )
         else:

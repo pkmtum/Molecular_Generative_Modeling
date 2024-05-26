@@ -44,7 +44,12 @@ def kl_divergence_categorical(pi_q, pi_p):
 def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteration: int) -> float:
     length = end_iteration - start_iteration
     x = min(max(iteration - start_iteration, 0) / length, 1)
-    return 0.5 * (1 + math.cos((1 + x) * math.pi)) * 0.9999 + 0.0001
+    return 0.5 * (1 + math.cos((1 + x) * math.pi)) * 0.99999 + 0.00001
+
+
+def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
+    cosine_length = cycle_length // 2
+    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) * 0.99999 + 0.00001
 
 
 def train_model(
@@ -69,14 +74,25 @@ def train_model(
     tau = 1.0
     decoder_model.set_gumbel_softmax_temperature(temperature=tau)
 
-    total_iteration_count = len(train_loader) * epochs
-    start_iteration = int(total_iteration_count * 0.25)
-    end_iteration = int(total_iteration_count * 0.75)
-    kl_schedule_func = functools.partial(monotonic_cosine_schedule, start_iteration=start_iteration, end_iteration=end_iteration)
+    kl_schedule_type = hparams["kl_schedule"]
+    if kl_schedule_type == "constant":
+        kl_schedule_func = lambda x: 1
+    elif kl_schedule_type == "cyclical":
+        total_iteration_count = len(train_loader) * epochs
+        num_cycles = 4
+        cycle_length = math.ceil(total_iteration_count / num_cycles)
+        kl_schedule_func = functools.partial(cyclic_cosine_schedule, cycle_length=cycle_length)
+    elif kl_schedule_type == "monotonic":
+        total_iteration_count = len(train_loader) * epochs
+        start_iteration = int(total_iteration_count * 0.25)
+        end_iteration = int(total_iteration_count * 0.75)
+        kl_schedule_func = functools.partial(monotonic_cosine_schedule, start_iteration=start_iteration, end_iteration=end_iteration)
 
     for epoch in range(epochs):
 
         for batch_index, train_batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1} Training")):
+
+            optimizer.zero_grad()
 
             iteration = len(train_loader) * epoch + batch_index
 
@@ -86,8 +102,6 @@ def train_model(
             if (iteration + 1) % N == 0:
                 tau = max(0.5, math.exp(-r * iteration))
                 decoder_model.set_gumbel_softmax_temperature(tau)
-
-            optimizer.zero_grad()
 
             train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = encoder_model(train_batch)
             train_z = torch.randn_like(train_z_mu) * train_z_sigma + train_z_mu
@@ -127,7 +141,7 @@ def train_model(
             ).log_prob(train_z.unsqueeze(1)).sum(dim=2)
             train_weighted_z_log_likelihood = train_z_log_likelihoods + torch.log(train_pi_p)
             train_z_log_responsibilities = train_weighted_z_log_likelihood - torch.logsumexp(train_weighted_z_log_likelihood, dim=1, keepdim=True)
-            train_pi_q = torch.exp(train_z_log_responsibilities)  # posterior distribution of the cluster indicators
+            train_pi_q = torch.exp(torch.clamp(train_z_log_responsibilities, -30, 20))  # posterior distribution of the cluster indicators
             cluster_kl_divergence = kl_divergence_categorical(
                 pi_q=train_pi_q,
                 pi_p=train_pi_p,
@@ -136,7 +150,7 @@ def train_model(
             cluster_kl_divergence = scatter(cluster_kl_divergence, train_batch.batch, dim=0, reduce='sum')
             # mean over batches
             cluster_kl_divergence = cluster_kl_divergence.mean()
-            train_loss += cluster_kl_divergence * c_kl_weight
+            train_loss += cluster_kl_divergence * c_kl_weight * kl_weight
 
             # z KL-Divergence
             sigma_pc = torch.exp(torch.clamp(decoder_model.cluster_log_sigmas, -30, 20))
@@ -152,6 +166,15 @@ def train_model(
             train_loss += z_kl_divergence * z_kl_weight * kl_weight
 
             train_loss.backward()
+            
+            # Check for NaNs in gradients
+            for param in encoder_model.parameters():
+                #if param.grad is not None:
+                    #print(param.grad.max())
+                if param.grad is not None and torch.isnan(param.grad).any():
+                    print("NaN detected in gradients")
+                    continue
+
             optimizer.step()
 
             # log to tensorboard
@@ -197,18 +220,22 @@ def main():
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--num_clusters", type=int, default=32, help="Number of clusters in the gaussian mixture.")
     parser.add_argument("--eta_dim", type=int, help="Dimension of the latent variable eta.")
-    parser.add_argument("--z_dim", type=int, default=8)
-    parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=256,
+    parser.add_argument("--z_dim", type=int, default=16)
+    parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=128,
         help="Number of dimensions of the hidden layer in the cluster MLP. If zero, the mapping from eta to pi is just a softmax."
     )
-    parser.add_argument("--bond_type_mlp_hidden_dim", type=int, default=256,
+    parser.add_argument("--bond_type_mlp_hidden_dim", type=int, default=128,
         help="Number of dimensions of the hidden layer in the bond type MLP. If zero, the mapping from a pair of latent vectors to a bond type is a linear operation."
+    )
+    parser.add_argument("--atom_type_mlp_hidden_dim", type=int, default=128,
+        help="Number of dimensions of the hidden layer in the atom type MLP."
     )
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
     parser.add_argument("--eta_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over eta in the loss.")
     parser.add_argument("--c_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over the cluster probabilities in the loss.")
     parser.add_argument("--z_kl_weight", type=float, default=0.1, help="Weight of the KL-divergence over the z in the loss.")
     parser.add_argument("--logdir", type=str, default="mixture_model", help="Name of the Tensorboard logging directory.")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in MLPs.")
     args = parser.parse_args()
 
     if args.eta_dim is None:
@@ -249,9 +276,12 @@ def main():
         "z_kl_weight": args.z_kl_weight,
         "cluster_mlp_hidden_dim": args.cluster_mlp_hidden_dim,
         "bond_type_mlp_hidden_dim": args.bond_type_mlp_hidden_dim,
+        "atom_type_mlp_hidden_dim": args.atom_type_mlp_hidden_dim,
         "batch_size": batch_size,
         "learning_rate": args.learning_rate,
         "epochs": args.epochs,
+        "dropout": args.dropout,
+        "kl_schedule": "cyclical"
     }
 
     encoder_model = MixtureModelEncoder(hparams=hparams).to(device)
@@ -291,14 +321,13 @@ def main():
         with open(smiles_file_path, "w") as file:
             json.dump(list(train_mol_smiles), file)
 
-    # evaluate the model by generating 1000 molecules
+    # evaluate the model by generating 10000 molecules
     decoder_model.eval()
-    num_generated_mols = 1000
+    num_generated_mols = 10000
     num_atoms = torch.tensor([9] * num_generated_mols, dtype=torch.int64, device=device)
     with torch.no_grad():
         data = decoder_model.sample(num_atoms, device)
 
-    # TODO: evaluate uniqueness & novelty
     num_valid_mols = 0
     num_connected_graphs = 0
     generated_mol_smiles = set()
@@ -310,22 +339,23 @@ def main():
         if nx.is_connected(pyg_utils.to_networkx(graph, to_undirected=True)):
             num_connected_graphs += 1
         else:
-            # graph is not connected; try to decode again
             continue
 
         try:
             mol = graph_to_mol(data=graph, includes_h=args.include_hydrogen, validate=True)
         except:
             continue
-        tb_writer.add_image('Generated Valid', mol_to_image_tensor(mol=mol), global_step=i, dataformats="NCHW")
         num_valid_mols += 1
 
         smiles = Chem.MolToSmiles(mol)
         if smiles not in generated_mol_smiles:
+            tb_writer.add_image('Generated Valid', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
             generated_mol_smiles.add(Chem.MolToSmiles(mol))
 
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)
+
+    # TODO: log encoder and decoder parameter counts
 
     tb_writer.add_hparams(
         hparam_dict=hparams,
@@ -338,7 +368,7 @@ def main():
     )
     
     # TODO: checkpoint saving and loading -> MixtureModel autoencoder
-    # TODO: parameter counts
+    
 
 
 if __name__ == "__main__":
