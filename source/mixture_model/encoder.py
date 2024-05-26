@@ -63,12 +63,12 @@ class MixtureModelEncoder(nn.Module):
 
         z_mu = z[:, :self.z_latent_dim]
         z_log_sigma = z[:, self.z_latent_dim:]
-        z_sigma = torch.exp(torch.clamp(z_log_sigma, -20, 30))
+        z_sigma = torch.exp(torch.clamp(z_log_sigma, -30, 20))
 
         eta = self.eta_head(self.graph_pooling(x, batch))
 
         eta_mu = eta[:, :self.eta_latent_dim]
         eta_log_sigma = eta[:, self.eta_latent_dim:]
-        eta_sigma = torch.exp(torch.clamp(eta_log_sigma, -20, 30))
+        eta_sigma = torch.exp(torch.clamp(eta_log_sigma, -30, 20))
 
         return z_mu, z_sigma, eta_mu, eta_sigma

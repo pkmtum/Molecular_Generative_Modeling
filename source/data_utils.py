@@ -249,6 +249,13 @@ def qm9_pre_filter(data: Data) -> bool:
     except Exception as e:
         # print(e)
         return False
+    
+    # drop molecules with only one heavy atom
+    hydrogen_count = data.x[:, 0].sum()
+    if hydrogen_count == data.x.shape[0] - 1:
+        print("Skipped Molecule")
+        return False
+
     return True
 
 

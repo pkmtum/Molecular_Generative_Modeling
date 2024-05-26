@@ -20,8 +20,8 @@ class MixtureModelDecoder(nn.Module):
         num_bond_types = hparams["num_bond_types"] + 1  # +1 for non-existent bonds
 
         # model parameters
-        self.eta_mu = nn.Parameter(torch.zeros(1, self.eta_dim))
-        self.eta_log_sigma = nn.Parameter(torch.randn(1, self.eta_dim))
+        self.eta_mu = nn.Parameter(torch.randn(1, self.eta_dim))
+        self.eta_log_sigma = nn.Parameter(torch.zeros(1, self.eta_dim))
         cluster_mlp_hidden_dim = hparams["cluster_mlp_hidden_dim"]
         if cluster_mlp_hidden_dim > 0:
             self.cluster_mlp = nn.Sequential(
@@ -34,12 +34,12 @@ class MixtureModelDecoder(nn.Module):
             self.cluster_mlp = nn.Identity()
 
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
-        self.cluster_log_sigmas = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
+        self.cluster_log_sigmas = nn.Parameter(torch.zeros(1, self.num_clusters, z_dim))
         self.atom_classifier = nn.Sequential(
-            nn.Linear(z_dim, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(z_dim, 256),
+            nn.BatchNorm1d(256),
             nn.PReLU(),
-            nn.Linear(128, num_atom_types)
+            nn.Linear(256, num_atom_types)
         )
         bond_type_mlp_hidden_dim = hparams["bond_type_mlp_hidden_dim"]
         if bond_type_mlp_hidden_dim:
@@ -58,11 +58,10 @@ class MixtureModelDecoder(nn.Module):
 
         # create edge indices of fully connected graph for all graph sizes up to 50
         self.edge_indices = []
-        for N in range(2, 50):
+        for N in range(1, 50):
             self.edge_indices.append(
                 torch.tensor(list(itertools.combinations(range(N), 2)))
             )
-
 
     def set_gumbel_softmax_temperature(self, temperature: float):
         self.gumbel_softmax_temperature = temperature
@@ -79,7 +78,7 @@ class MixtureModelDecoder(nn.Module):
         edge_index_list = []
         offsets = torch.cat([torch.tensor([0], device=device), torch.cumsum(num_atoms, dim=0)[:-1]])
         for i, N in enumerate(num_atoms):
-            pairs = self.edge_indices[N - 2].to(device)
+            pairs = self.edge_indices[N - 1].to(device)
             pairs += offsets[i]
             edge_index_list.append(pairs)
 
@@ -94,8 +93,11 @@ class MixtureModelDecoder(nn.Module):
 
         edge_index = edge_index.t().contiguous()
 
-        batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)
-        return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types, batch=batch)
+        if self.training:
+            return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types)
+        else:
+            batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)
+            return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types, batch=batch)
 
 
     def forward(self, eta: torch.Tensor, num_atoms: torch.Tensor) -> Data:
