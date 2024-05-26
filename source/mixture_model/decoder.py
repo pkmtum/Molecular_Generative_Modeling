@@ -79,8 +79,32 @@ class MixtureModelDecoder(nn.Module):
     def set_gumbel_softmax_temperature(self, temperature: float):
         self.gumbel_softmax_temperature = temperature
 
+    def sample_eta(self, num_atoms: torch.Tensor, device: str) -> torch.Tensor:
+        randn = torch.randn(size=(num_atoms.size(0), self.eta_dim), device=device)
+        eta_sigma = torch.exp(torch.clamp(self.eta_log_sigma, -20, 30))
+        eta = randn * eta_sigma + self.eta_mu
+        return eta
+
     def decode_eta(self, eta: torch.Tensor) -> torch.Tensor:
-        return F.softmax(self.cluster_mlp(eta), dim=1)
+        pi = F.softmax(self.cluster_mlp(eta), dim=1)
+        return pi
+    
+    def sample_c(self, pi: torch.Tensor, num_atoms: torch.Tensor) -> torch.Tensor:
+        # sample clusters using the gumbel-softmax reparameterization
+        log_pi = torch.log(pi)
+        c = F.gumbel_softmax(
+            logits=torch.repeat_interleave(log_pi, num_atoms, dim=0),
+            tau=self.gumbel_softmax_temperature,
+            hard=True
+        ).unsqueeze(-1)
+        return c
+    
+    def sample_z(self, c: torch.Tensor) -> torch.Tensor:
+        mu = torch.sum(self.cluster_means * c, dim=1)
+        log_sigma = torch.sum(self.cluster_log_sigmas * c, dim=1)
+        sigma = torch.exp(torch.clamp(log_sigma, -20, 30))
+        z = torch.randn_like(mu) * sigma + mu
+        return z
     
     def decode_z(self, z: torch.Tensor, num_atoms: torch.Tensor) -> Data:
         atom_types = self.atom_classifier(z)
@@ -112,33 +136,15 @@ class MixtureModelDecoder(nn.Module):
             batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)
             return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types, batch=batch)
 
-
     def forward(self, eta: torch.Tensor, num_atoms: torch.Tensor) -> Data:
-
         pi = self.decode_eta(eta)
-        log_pi = torch.log(pi)
-        # sample clusters using the gumbel-softmax reparameterization
-        c = F.gumbel_softmax(
-            logits=torch.repeat_interleave(log_pi, num_atoms, dim=0),
-            tau=self.gumbel_softmax_temperature,
-            hard=True
-        ).unsqueeze(-1)
-
-        mu = torch.sum(self.cluster_means * c, dim=1)
-        log_sigma = torch.sum(self.cluster_log_sigmas * c, dim=1)
-        sigma = torch.exp(torch.clamp(log_sigma, -20, 30))
-
-        z = torch.randn_like(mu) * sigma + mu
-
+        c = self.sample_c(pi=pi, num_atoms=num_atoms)
+        z = self.sample_z(c=c)
         return self.decode_z(z, num_atoms)
-
 
     def sample(self, num_atoms: torch.Tensor, device: str) -> Data:
         """
         Sample new molecules
         """
-
-        randn = torch.randn(size=(num_atoms.size(0), self.eta_dim), device=device)
-        eta_sigma = torch.exp(torch.clamp(self.eta_log_sigma, -20, 30))
-        eta = randn * eta_sigma + self.eta_mu
+        eta = self.sample_eta(num_atoms=num_atoms, device=device)
         return self.forward(eta, num_atoms)
