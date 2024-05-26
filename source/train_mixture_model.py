@@ -1,6 +1,7 @@
 import argparse
 import functools
 import json
+import datetime
 from typing import Dict, Any
 
 import torch
@@ -17,8 +18,7 @@ lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
 from data_utils import *
-from mixture_model.decoder import MixtureModelDecoder
-from mixture_model.encoder import MixtureModelEncoder
+from mixture_model.model import MixtureModel
 
 
 def kl_divergence_gaussian(mu_q, sigma_q, mu_p, sigma_p):
@@ -53,26 +53,29 @@ def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
 
 
 def train_model(
-        encoder_model: MixtureModelEncoder,
-        decoder_model: MixtureModelDecoder,
+        model: MixtureModel,
         optimizer: torch.optim.Optimizer,
         train_loader: DataLoader,
         tb_writer: SummaryWriter,
         hparams: Dict[str, Any],
-    ):
+    ) -> str:
+    # create checkpoint dir and unique filename
+    os.makedirs("./checkpoints/", exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_checkpoint = f"./checkpoints/mixture_model_{timestamp}.pt"
+
     epochs = hparams["epochs"]
     eta_kl_weight = hparams["eta_kl_weight"]
     c_kl_weight = hparams["c_kl_weight"]
     z_kl_weight = hparams["z_kl_weight"]
 
-    encoder_model.train()
-    decoder_model.train()
+    model.train()
 
     # parameters for gumbel softmax temperature annealing from https://arxiv.org/abs/1611.01144
     N = 500
-    r = 1e-4
+    r = 1e-5
     tau = 1.0
-    decoder_model.set_gumbel_softmax_temperature(temperature=tau)
+    model.decoder.set_gumbel_softmax_temperature(temperature=tau)
 
     kl_schedule_type = hparams["kl_schedule"]
     if kl_schedule_type == "constant":
@@ -101,12 +104,12 @@ def train_model(
             # anneal the gumbel softmax temperature
             if (iteration + 1) % N == 0:
                 tau = max(0.5, math.exp(-r * iteration))
-                decoder_model.set_gumbel_softmax_temperature(tau)
+                model.decoder.set_gumbel_softmax_temperature(tau)
 
-            train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = encoder_model(train_batch)
+            train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = model.encoder(train_batch)
             train_z = torch.randn_like(train_z_mu) * train_z_sigma + train_z_mu
             train_num_atoms = torch.bincount(train_batch.batch)
-            train_reconstruction = decoder_model.decode_z(train_z, train_num_atoms)
+            train_reconstruction = model.decoder.decode_z(train_z, train_num_atoms)
             train_target_x = torch.argmax(train_batch.x, dim=1)
 
             # atom reconstruction loss
@@ -126,18 +129,18 @@ def train_model(
             eta_kl_divergence = kl_divergence_gaussian(
                 mu_q=train_eta_mu,
                 sigma_q=train_eta_sigma,
-                mu_p=decoder_model.eta_mu,
-                sigma_p=torch.exp(torch.clamp(decoder_model.eta_log_sigma, -30, 20))
+                mu_p=model.decoder.eta_mu,
+                sigma_p=torch.exp(torch.clamp(model.decoder.eta_log_sigma, -30, 20))
             ).mean()  # mean over batch
             train_loss += eta_kl_divergence * eta_kl_weight * kl_weight
 
             # cluster KL-Divergence
             train_eta = torch.randn_like(train_eta_mu) * train_eta_sigma + train_eta_mu
-            train_pi_p = decoder_model.decode_eta(train_eta)
+            train_pi_p = model.decoder.decode_eta(train_eta)
             train_pi_p = torch.repeat_interleave(train_pi_p, train_num_atoms, dim=0)
             train_z_log_likelihoods = D.Normal(
-                loc=decoder_model.cluster_means, 
-                scale=torch.exp(torch.clamp(decoder_model.cluster_log_sigmas, -30, 20))
+                loc=model.decoder.cluster_means, 
+                scale=torch.exp(torch.clamp(model.decoder.cluster_log_sigmas, -30, 20))
             ).log_prob(train_z.unsqueeze(1)).sum(dim=2)
             train_weighted_z_log_likelihood = train_z_log_likelihoods + torch.log(train_pi_p)
             train_z_log_responsibilities = train_weighted_z_log_likelihood - torch.logsumexp(train_weighted_z_log_likelihood, dim=1, keepdim=True)
@@ -153,11 +156,11 @@ def train_model(
             train_loss += cluster_kl_divergence * c_kl_weight * kl_weight
 
             # z KL-Divergence
-            sigma_pc = torch.exp(torch.clamp(decoder_model.cluster_log_sigmas, -30, 20))
+            sigma_pc = torch.exp(torch.clamp(model.decoder.cluster_log_sigmas, -30, 20))
             z_kl_divergence = kl_divergence_gaussian(
                 mu_q=train_z_mu.unsqueeze(-1),
                 sigma_q=train_z_sigma.unsqueeze(-1),
-                mu_p=decoder_model.cluster_means.transpose(1, 2),
+                mu_p=model.decoder.cluster_means.transpose(1, 2),
                 sigma_p=sigma_pc.transpose(1, 2)
             )
             z_kl_divergence = (z_kl_divergence * train_pi_q).sum(dim=1)
@@ -166,15 +169,6 @@ def train_model(
             train_loss += z_kl_divergence * z_kl_weight * kl_weight
 
             train_loss.backward()
-            
-            # Check for NaNs in gradients
-            for param in encoder_model.parameters():
-                #if param.grad is not None:
-                    #print(param.grad.max())
-                if param.grad is not None and torch.isnan(param.grad).any():
-                    print("NaN detected in gradients")
-                    continue
-
             optimizer.step()
 
             # log to tensorboard
@@ -183,6 +177,19 @@ def train_model(
             tb_writer.add_scalar("Eta KL-Divergence", eta_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Cluster KL-Divergence", cluster_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Z KL-Divergence", z_kl_divergence.item(), iteration)
+
+        # save checkpoint
+        torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "hparams": hparams,
+            },
+            out_checkpoint
+        )
+        print(f"Saved MixtureModel training checkpoint to {out_checkpoint}")
+    
+    return out_checkpoint
 
 
 def get_batch_item(batch_data: Data, i: int):
@@ -235,7 +242,8 @@ def main():
     parser.add_argument("--c_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over the cluster probabilities in the loss.")
     parser.add_argument("--z_kl_weight", type=float, default=0.1, help="Weight of the KL-divergence over the z in the loss.")
     parser.add_argument("--logdir", type=str, default="mixture_model", help="Name of the Tensorboard logging directory.")
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in MLPs.")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in decoder MLPs.")
+    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
     args = parser.parse_args()
 
     if args.eta_dim is None:
@@ -284,25 +292,28 @@ def main():
         "kl_schedule": "cyclical"
     }
 
-    encoder_model = MixtureModelEncoder(hparams=hparams).to(device)
-    decoder_model = MixtureModelDecoder(hparams=hparams).to(device)
+    mixture_model = MixtureModel(hparams=hparams).to(device)
 
     optimizer = torch.optim.Adam(
-        params=list(encoder_model.parameters()) + list(decoder_model.parameters()),
+        params=mixture_model.parameters(),
         lr=args.learning_rate,
         weight_decay=1e-6
     )
 
     tb_writer = create_tensorboard_writer(experiment_name=args.logdir)
 
-    train_model(
-        encoder_model=encoder_model,
-        decoder_model=decoder_model,
+    out_checkpoint_path = train_model(
+        model=mixture_model,
         optimizer=optimizer,
         train_loader=train_loader,
         tb_writer=tb_writer,
         hparams=hparams,
     )
+
+
+    ###########################################################################
+    # Evaluation
+    ###########################################################################
 
     # create set of training data SMILES to check the novelty
     train_mol_smiles = set()
@@ -322,11 +333,11 @@ def main():
             json.dump(list(train_mol_smiles), file)
 
     # evaluate the model by generating 10000 molecules
-    decoder_model.eval()
+    mixture_model.eval()
     num_generated_mols = 10000
     num_atoms = torch.tensor([9] * num_generated_mols, dtype=torch.int64, device=device)
     with torch.no_grad():
-        data = decoder_model.sample(num_atoms, device)
+        data = mixture_model.decoder.sample(num_atoms, device)
 
     num_valid_mols = 0
     num_connected_graphs = 0
@@ -355,8 +366,11 @@ def main():
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)
 
-    # TODO: log encoder and decoder parameter counts
-
+    hparams.update({
+        "Encoder Parameter Count": sum(p.numel() for p in mixture_model.encoder.parameters() if p.requires_grad),
+        "Decoder Parameter Count": sum(p.numel() for p in mixture_model.decoder.parameters() if p.requires_grad),
+        "Checkpoint": out_checkpoint_path,
+    })
     tb_writer.add_hparams(
         hparam_dict=hparams,
         metric_dict={
@@ -366,9 +380,6 @@ def main():
             "Novelty": novel_mol_count / max(len(generated_mol_smiles), 1),
         }
     )
-    
-    # TODO: checkpoint saving and loading -> MixtureModel autoencoder
-    
 
 
 if __name__ == "__main__":
