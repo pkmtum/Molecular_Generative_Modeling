@@ -264,7 +264,7 @@ def main():
     dataset = create_qm9_mixture_vae_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen,
-        refresh_data_cache=False,
+        refresh_data_cache=args.use_cached_dataset,
         properties=None,
         prop_norm_df=prop_norm_df
     )

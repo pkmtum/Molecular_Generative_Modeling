@@ -1,3 +1,0 @@
-#!/bin/bash
-python train_graph_vae.py --properties=lumo --use_cached_dataset --epochs=120 --logdir=graph_vae_lumo --latent_dim=64
-python train_graph_vae.py --properties=lumo --use_cached_dataset --epochs=120 --logdir=graph_vae_lumo --latent_dim=64 --property_latent_dim=16

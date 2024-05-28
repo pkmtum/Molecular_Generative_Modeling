@@ -406,7 +406,7 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
     parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
-    parser.add_argument("--logdir", type=str, default="graph_vae_dev_x", help="Name of the Tensorboard logging directory.")
+    parser.add_argument("--logdir", type=str, default="graph_vae_dev_y", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
     parser.add_argument("--prop_net_hidden_dim", type=int, default=67, help="Number of neurons in the hidden layers of the property predictor.")
     parser.add_argument("--property_model_dropout", type=float, default=0.15, help="Dropout probability in the property prediction model.")
