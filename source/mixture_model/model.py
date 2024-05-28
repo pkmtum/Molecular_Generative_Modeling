@@ -25,3 +25,10 @@ class MixtureModel(nn.Module):
         graph_vae_model = MixtureModel(hparams=checkpoint["hparams"])
         graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
         return graph_vae_model
+    
+    def encode(self, x: Data) -> Tuple[torch.Tensor, torch.Tensor]:
+        z_mu, z_sigma, eta_mu, eta_sigma = self.encoder(x)
+        z = torch.randn_like(z_mu) * z_sigma + z_mu
+        eta = torch.randn_like(eta_mu) * eta_sigma + eta_mu
+        return z, eta
+        

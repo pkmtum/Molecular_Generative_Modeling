@@ -6,6 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 
+from .common import ResidualBlock
+
 
 class MixtureModelDecoder(nn.Module):
 
@@ -21,47 +23,36 @@ class MixtureModelDecoder(nn.Module):
         dropout_p = hparams["dropout"]
 
         # model parameters
-        self.eta_mu = nn.Parameter(torch.randn(1, self.eta_dim))
+        self.eta_mu = nn.Parameter(torch.zeros(1, self.eta_dim))
         self.eta_log_sigma = nn.Parameter(torch.zeros(1, self.eta_dim))
         cluster_mlp_hidden_dim = hparams["cluster_mlp_hidden_dim"]
         if cluster_mlp_hidden_dim > 0:
-            self.cluster_mlp = nn.Sequential(
-                nn.Linear(self.eta_dim, cluster_mlp_hidden_dim),
-                nn.BatchNorm1d(cluster_mlp_hidden_dim),
-                nn.PReLU(),
-                nn.Linear(cluster_mlp_hidden_dim, self.num_clusters)
+            self.cluster_mlp = ResidualBlock(
+                in_features=self.eta_dim,
+                hidden_features=cluster_mlp_hidden_dim,
+                out_features=self.num_clusters,
+                dropout=dropout_p,
             )
         else:
             self.cluster_mlp = nn.Identity()
 
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
-        self.cluster_log_sigmas = nn.Parameter(torch.zeros(1, self.num_clusters, z_dim))
+        self.cluster_log_sigmas = nn.Parameter(torch.ones(1, self.num_clusters, z_dim) * -2.0)
         atom_type_mlp_hidden_dim = hparams["atom_type_mlp_hidden_dim"]
-        self.atom_classifier = nn.Sequential(
-            nn.Linear(z_dim, atom_type_mlp_hidden_dim),
-            nn.BatchNorm1d(atom_type_mlp_hidden_dim),
-            nn.PReLU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(atom_type_mlp_hidden_dim, atom_type_mlp_hidden_dim),
-            nn.BatchNorm1d(atom_type_mlp_hidden_dim),
-            nn.PReLU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(atom_type_mlp_hidden_dim, num_atom_types)
+        self.atom_classifier = ResidualBlock(
+            in_features=z_dim,
+            hidden_features=atom_type_mlp_hidden_dim,
+            out_features=num_atom_types,
+            dropout=dropout_p
         )
         bond_type_mlp_hidden_dim = hparams["bond_type_mlp_hidden_dim"]
-        if bond_type_mlp_hidden_dim:
-            self.bond_matrix = nn.Parameter(torch.randn(1, z_dim, z_dim, z_dim))
-            self.bond_type_mlp = nn.Sequential(
-                nn.PReLU(),
-                nn.Linear(z_dim, bond_type_mlp_hidden_dim),
-                nn.BatchNorm1d(bond_type_mlp_hidden_dim),
-                nn.PReLU(),
-                nn.Dropout(dropout_p),
-                nn.Linear(bond_type_mlp_hidden_dim, bond_type_mlp_hidden_dim),
-                nn.BatchNorm1d(bond_type_mlp_hidden_dim),
-                nn.PReLU(),
-                nn.Dropout(dropout_p),
-                nn.Linear(bond_type_mlp_hidden_dim, num_bond_types)
+        if bond_type_mlp_hidden_dim > 0:
+            self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))
+            self.bond_type_mlp = ResidualBlock(
+                in_features=num_bond_types,
+                hidden_features=bond_type_mlp_hidden_dim,
+                out_features=num_bond_types,
+                dropout=dropout_p
             )
         else:
             self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))

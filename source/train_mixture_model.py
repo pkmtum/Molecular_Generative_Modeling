@@ -44,12 +44,12 @@ def kl_divergence_categorical(pi_q, pi_p):
 def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteration: int) -> float:
     length = end_iteration - start_iteration
     x = min(max(iteration - start_iteration, 0) / length, 1)
-    return 0.5 * (1 + math.cos((1 + x) * math.pi)) * 0.99999 + 0.00001
+    return 0.5 * (1 + math.cos((1 + x) * math.pi)) * 0.999999 + 0.000001
 
 
 def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
     cosine_length = cycle_length // 2
-    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) * 0.99999 + 0.00001
+    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) * 0.999999 + 0.000001
 
 
 def train_model(
@@ -58,6 +58,7 @@ def train_model(
         train_loader: DataLoader,
         tb_writer: SummaryWriter,
         hparams: Dict[str, Any],
+        device: str,
     ) -> str:
     # create checkpoint dir and unique filename
     os.makedirs("./checkpoints/", exist_ok=True)
@@ -137,6 +138,7 @@ def train_model(
             # cluster KL-Divergence
             train_eta = torch.randn_like(train_eta_mu) * train_eta_sigma + train_eta_mu
             train_pi_p = model.decoder.decode_eta(train_eta)
+
             train_pi_p = torch.repeat_interleave(train_pi_p, train_num_atoms, dim=0)
             train_z_log_likelihoods = D.Normal(
                 loc=model.decoder.cluster_means, 
@@ -225,22 +227,22 @@ def main():
     )
     parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
-    parser.add_argument("--num_clusters", type=int, default=32, help="Number of clusters in the gaussian mixture.")
+    parser.add_argument("--num_clusters", type=int, default=4, help="Number of clusters in the gaussian mixture.")
     parser.add_argument("--eta_dim", type=int, help="Dimension of the latent variable eta.")
-    parser.add_argument("--z_dim", type=int, default=16, help="Dimension of the latent variable z.")
+    parser.add_argument("--z_dim", type=int, default=4, help="Dimension of the latent variable z.")
     parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=0,
         help="Number of dimensions of the hidden layer in the cluster MLP. If zero, the mapping from eta to pi is just a softmax."
     )
-    parser.add_argument("--bond_type_mlp_hidden_dim", type=int, default=128,
+    parser.add_argument("--bond_type_mlp_hidden_dim", type=int, default=0,
         help="Number of dimensions of the hidden layer in the bond type MLP. If zero, the mapping from a pair of latent vectors to a bond type is a linear operation."
     )
-    parser.add_argument("--atom_type_mlp_hidden_dim", type=int, default=128,
+    parser.add_argument("--atom_type_mlp_hidden_dim", type=int, default=64,
         help="Number of dimensions of the hidden layer in the atom type MLP."
     )
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--eta_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over eta in the loss.")
     parser.add_argument("--c_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over the cluster probabilities in the loss.")
-    parser.add_argument("--z_kl_weight", type=float, default=0.1, help="Weight of the KL-divergence over the z in the loss.")
+    parser.add_argument("--z_kl_weight", type=float, default=0.02, help="Weight of the KL-divergence over the z in the loss.")
     parser.add_argument("--logdir", type=str, default="mixture_model", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in decoder MLPs.")
     parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
@@ -308,6 +310,7 @@ def main():
         train_loader=train_loader,
         tb_writer=tb_writer,
         hparams=hparams,
+        device=device,
     )
 
 
@@ -332,9 +335,9 @@ def main():
         with open(smiles_file_path, "w") as file:
             json.dump(list(train_mol_smiles), file)
 
-    # evaluate the model by generating 10000 molecules
+    # evaluate the model by generating 1000 molecules
     mixture_model.eval()
-    num_generated_mols = 10000
+    num_generated_mols = 1000
     num_atoms = torch.tensor([9] * num_generated_mols, dtype=torch.int64, device=device)
     with torch.no_grad():
         data = mixture_model.decoder.sample(num_atoms, device)
