@@ -225,11 +225,11 @@ def main():
     parser.add_argument("--use_cached_dataset", action="store_true", 
         help="Use the cached pre-processed dataset for training to avoid time consuming pre-processing before each training run."
     )
-    parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
+    parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--num_clusters", type=int, default=4, help="Number of clusters in the gaussian mixture.")
     parser.add_argument("--eta_dim", type=int, help="Dimension of the latent variable eta.")
-    parser.add_argument("--z_dim", type=int, default=4, help="Dimension of the latent variable z.")
+    parser.add_argument("--z_dim", type=int, default=32, help="Dimension of the latent variable z.")
     parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=0,
         help="Number of dimensions of the hidden layer in the cluster MLP. If zero, the mapping from eta to pi is just a softmax."
     )
