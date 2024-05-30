@@ -332,7 +332,7 @@ def evaluate_model(
         with open(smiles_file_path, "w") as file:
             json.dump(list(train_mol_smiles), file)
 
-    num_samples = 1000
+    num_samples = 10000
     num_valid_mols = 0
     num_connected_graphs = 0
 
@@ -382,8 +382,8 @@ def evaluate_model(
         "Mean Decode Attempts": total_decode_attempts / num_samples,
         "Connectedness": num_connected_graphs / total_decode_attempts,
         "Validity": num_valid_mols / total_decode_attempts,
-        "Uniqueness": len(generated_mol_smiles) / num_valid_mols,
-        "Novelty": novel_mol_count / len(generated_mol_smiles),  
+        "Uniqueness": len(generated_mol_smiles) / max(num_valid_mols, 1),
+        "Novelty": novel_mol_count / max(len(generated_mol_smiles), 1),  
     })
     log_hparams["checkpoint"] = checkpoint_path
     tb_writer.add_hparams(hparam_dict=log_hparams, metric_dict=metrics)

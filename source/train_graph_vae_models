@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# generative model without property prediction
+# generative model without property prediction including explicit hydrogen atoms
+python train_graph_vae.py --include_hydrogen
+# generative model without property prediction ex
 python train_graph_vae.py
 # models with property prediction for inverse design
 python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2
