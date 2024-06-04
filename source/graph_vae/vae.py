@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_geometric.data import Data
-from torch_geometric.utils import dense_to_sparse, remove_self_loops
+from torch_geometric.data import Data, Batch
+from torch_geometric.utils import dense_to_sparse, remove_self_loops, to_undirected
 
 import pandas as pd
 
@@ -173,6 +173,9 @@ class GraphVAE(nn.Module):
     
 
     def encode(self, x: Data):
+        if not isinstance(x, Batch):
+            x = Batch.from_data_list(data_list=[x])
+
         mu, log_sigma = self.encoder(x)
 
         log_sigma = torch.clamp(log_sigma, -30.0, 20.0)
@@ -182,6 +185,8 @@ class GraphVAE(nn.Module):
         return z
     
     def encode_mean(self, x: Data):
+        if not isinstance(x, Batch):
+            x = Batch.from_data_list(data_list=[x])
         mu, _ = self.encoder(x)
         return mu
 
@@ -206,7 +211,11 @@ class GraphVAE(nn.Module):
 
 
     def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], stochastic: bool) -> Data:
-        # TODO: handle batches
+        """
+        Convert one batch element of the decoder output, which consists of the adjacency matrix,
+        the node attributes matrix and the edge attribute matrix into a PyTorch Geometric graph object.
+        """
+
         pred_adj_triu_mat = x[0][0]
         pred_node_mat = x[1][0]
         pred_edge_triu_mat = x[2][0]
@@ -265,5 +274,6 @@ class GraphVAE(nn.Module):
             node_feature_sample = pred_node_mat[node_mask].argmax(dim=1)
         x = F.one_hot(node_feature_sample, num_classes=self.num_node_features)
 
-        return Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr.float())
+        edge_index, edge_attr = to_undirected(edge_index=edge_index, edge_attr=edge_attr.float())
+        return Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr)
     
