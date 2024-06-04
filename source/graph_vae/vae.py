@@ -9,6 +9,7 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.utils import dense_to_sparse, remove_self_loops, to_undirected
 
 import pandas as pd
+from tqdm import tqdm
 
 from .encoder import Encoder
 from .decoder import Decoder
@@ -212,68 +213,77 @@ class GraphVAE(nn.Module):
 
     def output_to_graph(self, x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], stochastic: bool) -> Data:
         """
-        Convert one batch element of the decoder output, which consists of the adjacency matrix,
-        the node attributes matrix and the edge attribute matrix into a PyTorch Geometric graph object.
+        Convert the decoder output, which consists of the adjacency matrix,
+        the node attributes matrix and the edge attribute matrix into a PyTorch Geometric graph objects.
         """
+        batch_size = x[0].shape[0]
+        data_list = []
+        for batch_item in tqdm(range(batch_size)):
+            pred_adj_triu_mat = x[0][batch_item]
+            pred_node_mat = x[1][batch_item]
+            pred_edge_triu_mat = x[2][batch_item]
 
-        pred_adj_triu_mat = x[0][0]
-        pred_node_mat = x[1][0]
-        pred_edge_triu_mat = x[2][0]
+            device = pred_adj_triu_mat.device
+            n = self.max_num_nodes
 
-        device = pred_adj_triu_mat.device
-        n = self.max_num_nodes
+            if stochastic:
+                softmax = torch.nn.Softmax(dim=1)
+                normalized_pred_edge_triu_mat = softmax(pred_edge_triu_mat)
+                edge_triu_mat = torch.multinomial(normalized_pred_edge_triu_mat, num_samples=1)[:, 0].float()
+            else:
+                edge_triu_mat = pred_edge_triu_mat.argmax(dim=1).float()
 
-        if stochastic:
-            softmax = torch.nn.Softmax(dim=1)
-            normalized_pred_edge_triu_mat = softmax(pred_edge_triu_mat)
-            edge_triu_mat = torch.multinomial(normalized_pred_edge_triu_mat, num_samples=1)[:, 0].float()
+            edge_mat = torch.zeros(n, n, device=device)
+            edge_mat[torch.ones(n, n).triu(diagonal=1) == 1] = edge_triu_mat
+            edge_mat = edge_mat + 1  # add one so we can so that 0 indicates no node instead of hydrogen
+
+            # convert predicted upper triagular matrix into symmetric edge index and
+            if stochastic:
+                adj_triu_mat = torch.bernoulli(F.sigmoid(pred_adj_triu_mat))
+            else:
+                adj_triu_mat = torch.where(F.sigmoid(pred_adj_triu_mat) > 0.5, 1.0, 0.0)
+            
+            adj_mat = torch.zeros(n, n, device=device)
+            adj_mat[torch.ones(n, n).triu() == 1] = adj_triu_mat
+            diagonal = adj_mat.diagonal()
+
+            # combine the adjacency matrix with edge features
+            edge_mat *= adj_mat
+
+            node_mask = diagonal == 1
+            edge_index, edge_attr = dense_to_sparse(adj=edge_mat.unsqueeze(0), mask=node_mask.unsqueeze(0))
+
+            edge_attr = F.one_hot((edge_attr - 1).long(), num_classes=self.num_edge_features)
+
+            # Adjust indices in edge_index to account for removed nodes
+            # Create a mapping from old indices to new indices
+            old_to_new_indices = torch.cumsum(node_mask, 0) - 1
+            old_to_new_indices[~node_mask] = -1
+            new_edge_index = old_to_new_indices[edge_index]
+
+            # Remove edges that contain removed nodes
+            valid_edges = (new_edge_index >= 0).all(dim=0)
+            new_edge_index = new_edge_index[:, valid_edges]
+            new_edge_attr = edge_attr[valid_edges, :]
+
+            edge_index, edge_attr = remove_self_loops(edge_index=new_edge_index, edge_attr=new_edge_attr)
+
+            # convert node feature logits into one-hot vector
+            if stochastic:
+                softmax = torch.nn.Softmax(dim=1)
+                normalized_pred_node_mat = softmax(pred_node_mat[node_mask])
+                node_feature_sample = torch.multinomial(normalized_pred_node_mat, num_samples=1)[:, 0]
+            else:
+                node_feature_sample = pred_node_mat[node_mask].argmax(dim=1)
+            x_one_hot = F.one_hot(node_feature_sample, num_classes=self.num_node_features)
+
+            edge_index, edge_attr = to_undirected(edge_index=edge_index, edge_attr=edge_attr.float())
+            graph_data = Data(x=x_one_hot.float(), edge_index=edge_index, edge_attr=edge_attr)
+            data_list.append(graph_data)
+
+        if len(data_list) == 1:
+            return data_list[0]
         else:
-            edge_triu_mat = pred_edge_triu_mat.argmax(dim=1).float()
+            return Batch.from_data_list(data_list=data_list)
 
-        edge_mat = torch.zeros(n, n, device=device)
-        edge_mat[torch.ones(n, n).triu(diagonal=1) == 1] = edge_triu_mat
-        edge_mat = edge_mat + 1  # add one so we can so that 0 indicates no node instead of hydrogen
-
-        # convert predicted upper triagular matrix into symmetric edge index and
-        if stochastic:
-            adj_triu_mat = torch.bernoulli(F.sigmoid(pred_adj_triu_mat))
-        else:
-            adj_triu_mat = torch.where(F.sigmoid(pred_adj_triu_mat) > 0.5, 1.0, 0.0)
-        
-        adj_mat = torch.zeros(n, n, device=device)
-        adj_mat[torch.ones(n, n).triu() == 1] = adj_triu_mat
-        diagonal = adj_mat.diagonal()
-
-        # combine the adjacency matrix with edge features
-        edge_mat *= adj_mat
-
-        node_mask = diagonal == 1
-        edge_index, edge_attr = dense_to_sparse(adj=edge_mat.unsqueeze(0), mask=node_mask.unsqueeze(0))
-
-        edge_attr = F.one_hot((edge_attr - 1).long(), num_classes=self.num_edge_features)
-
-        # Adjust indices in edge_index to account for removed nodes
-        # Create a mapping from old indices to new indices
-        old_to_new_indices = torch.cumsum(node_mask, 0) - 1
-        old_to_new_indices[~node_mask] = -1
-        new_edge_index = old_to_new_indices[edge_index]
-
-        # Remove edges that contain removed nodes
-        valid_edges = (new_edge_index >= 0).all(dim=0)
-        new_edge_index = new_edge_index[:, valid_edges]
-        new_edge_attr = edge_attr[valid_edges, :]
-
-        edge_index, edge_attr = remove_self_loops(edge_index=new_edge_index, edge_attr=new_edge_attr)
-
-        # convert node feature logits into one-hot vector
-        if stochastic:
-            softmax = torch.nn.Softmax(dim=1)
-            normalized_pred_node_mat = softmax(pred_node_mat[node_mask])
-            node_feature_sample = torch.multinomial(normalized_pred_node_mat, num_samples=1)[:, 0]
-        else:
-            node_feature_sample = pred_node_mat[node_mask].argmax(dim=1)
-        x = F.one_hot(node_feature_sample, num_classes=self.num_node_features)
-
-        edge_index, edge_attr = to_undirected(edge_index=edge_index, edge_attr=edge_attr.float())
-        return Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr)
     
