@@ -21,6 +21,8 @@ class ResidualBlock(nn.Module):
             self.residual = nn.Linear(in_features, out_features)
         else:
             self.residual = nn.Identity()
+
+        self.batch_norm = nn.BatchNorm1d(out_features)
         self.activation = nn.GELU()
 
         # zero initialization
@@ -29,4 +31,5 @@ class ResidualBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = self.mlp(x)
+        y = self.batch_norm(y)
         return self.activation(y + self.residual(x))
