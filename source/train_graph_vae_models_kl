@@ -1,6 +1,7 @@
 #!/bin/bash
 
 python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight=1.0 --logdir=graph_vae_kl --property_latent_dim=16
+python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight=0.2 --logdir=graph_vae_kl --property_latent_dim=16
 python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight=0.1 --logdir=graph_vae_kl --property_latent_dim=16
 python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight=0.05 --logdir=graph_vae_kl --property_latent_dim=16
 python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight=0.02 --logdir=graph_vae_kl --property_latent_dim=16
