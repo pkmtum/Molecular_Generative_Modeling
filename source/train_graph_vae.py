@@ -93,6 +93,7 @@ def train_model(
         kl_schedule_func = functools.partial(monotonic_cosine_schedule, start_iteration=start_iteration, end_iteration=end_iteration)
 
     kl_weight_scale = hparams["kl_weight"]
+    kl_weight_scale_property = hparams["kl_weight_property"]
 
     nll_loss_func = nn.GaussianNLLLoss(full=False)
 
@@ -111,7 +112,7 @@ def train_model(
 
             iteration = len(train_loader) * epoch + batch_index
 
-            kl_weight = kl_schedule_func(iteration) * kl_weight_scale
+            kl_weight = kl_schedule_func(iteration)
             
             train_model_ouput = graph_vae_model(train_batch)
             train_recon, mu, sigma = train_model_ouput[:3]
@@ -119,7 +120,7 @@ def train_model(
             train_target = (train_batch.adj_triu_mat, train_batch.node_mat, train_batch.edge_triu_mat)
 
             train_recon_loss = graph_vae_model.reconstruction_loss(input=train_recon, target=train_target)
-            train_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+            train_kl_divergence = graph_vae_model.kl_divergence(mu=mu, sigma=sigma, kl_weight=kl_weight_scale, kl_weight_property=kl_weight_scale_property)
             train_loss = train_recon_loss + kl_weight * train_kl_divergence
             train_elbo = -train_loss
 
@@ -171,7 +172,7 @@ def train_model(
                 val_target = (val_batch.adj_triu_mat, val_batch.node_mat, val_batch.edge_triu_mat)
 
                 val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-                val_kl_divergence = GraphVAE.kl_divergence(mu=mu, sigma=sigma)
+                val_kl_divergence = graph_vae_model.kl_divergence(mu=mu, sigma=sigma, kl_weight=kl_weight_scale, kl_weight_property=kl_weight_scale_property)
                 val_loss = val_recon_loss + kl_weight * val_kl_divergence
 
                 val_elbo_sum -= val_loss
@@ -244,6 +245,7 @@ def evaluate_model(
     log_hparams["properties"] = ",".join(hparams["properties"])
 
     kl_weight = hparams["kl_weight"]
+    kl_weight_property = hparams["kl_weight_property"]
 
     nll_loss_func = nn.GaussianNLLLoss(full=True)
 
@@ -287,7 +289,7 @@ def evaluate_model(
                     tb_writer.add_image('Validation Reconstruction', mol_to_image_tensor(mol=recon_mol), global_step=i, dataformats="NCHW")
 
             val_recon_loss = graph_vae_model.reconstruction_loss(input=val_recon, target=val_target)
-            val_loss = val_recon_loss + GraphVAE.kl_divergence(mu=mu, sigma=sigma) * kl_weight
+            val_loss = val_recon_loss + graph_vae_model.kl_divergence(mu=mu, sigma=sigma, kl_weight=kl_weight, kl_weight_property=kl_weight_property)
 
             val_elbo_sum -= val_loss
             val_log_likelihood_sum -= val_recon_loss
@@ -405,7 +407,8 @@ def main():
     parser.add_argument("--max_decode_attempts", type=int, default=1, help="Maximum number of stochastic decoding attempt until a valid molecule is decoded.")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--properties", type=str, help="Properties to predict from the latent space.")
-    parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term.")
+    parser.add_argument("--kl_weight", type=float, default=1e-2, help="Weight of the KL-Divergence loss term. If latent splitting is used this weighting only affects the portion of the latent space that is NOT used for property prediction.")
+    parser.add_argument("--kl_weight_property", type=float, help="Weight of the KL-Divergence loss term in the part of the latent space that is used for property prediction. Only used with latent splitting.")
     parser.add_argument("--logdir", type=str, default="graph_vae", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--property_latent_dim", type=int, help="Size of the portion of the latent space used for property prediction.")
     parser.add_argument("--prop_net_hidden_dim", type=int, default=67, help="Number of neurons in the hidden layers of the property predictor.")
@@ -414,10 +417,16 @@ def main():
 
     if args.property_latent_dim is None:
         property_latent_dim = args.latent_dim
+        kl_weight_property = args.kl_weight
     else:
         property_latent_dim = args.property_latent_dim
+        if args.kl_weight_property:
+            kl_weight_property = args.kl_weight_property
+        else:
+            kl_weight_property = args.kl_weight
 
     # --properties=homo,lumo,r2
+    # --kl_weight_property=1e-1
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -471,6 +480,7 @@ def main():
         "max_decode_attempts": args.max_decode_attempts,
         "properties": properties,
         "kl_weight": args.kl_weight,
+        "kl_weight_property": kl_weight_property,
         "property_latent_dim": property_latent_dim,
         "prop_net_hidden_dim": args.prop_net_hidden_dim,
         "property_model_dropout": args.property_model_dropout,

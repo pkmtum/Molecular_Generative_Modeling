@@ -110,31 +110,23 @@ class GraphVAE(nn.Module):
 
         return x, mu, sigma, y_mu, y_sigma
     
-    @staticmethod
-    def kl_divergence(mu: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+    def kl_divergence(self, mu: torch.Tensor, sigma: torch.Tensor, kl_weight: float, kl_weight_property: float) -> torch.Tensor:
         sigma_squared = sigma * sigma
         log_sigma_squared = torch.log(sigma_squared)
         mu_squared = mu * mu
-        # technically this is the correct KL-divergence
-        # but in practice it is way too high
-        kl_div_sample = 0.5 * torch.sum(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
-        #kl_div_sample = 0.5 * torch.mean(sigma_squared + mu_squared - log_sigma_squared - 1, dim=1)
+
+        kl_div = sigma_squared + mu_squared - log_sigma_squared - 1
+
+        if self.latent_dim != self.property_z_size:
+            kl_weight_property_tensor = torch.tensor(data=kl_weight_property, device=kl_div.device).expand(self.property_z_size).unsqueeze(0)
+            kl_weight_tensor = torch.tensor(data=kl_weight, device=kl_div.device).expand(self.latent_dim - self.property_z_size).unsqueeze(0)
+            kl_div *= torch.cat([kl_weight_property_tensor, kl_weight_tensor], dim=1)
+        else:
+            kl_div *= kl_weight
+
+        kl_div_sample = 0.5 * torch.sum(kl_div, dim=1)
         # average over the batch
         return torch.mean(kl_div_sample)
-    
-    @staticmethod
-    def pairwise_kl_divergence(tensor_p, tensor_q):
-        # Expand tensors for broadcasting
-        tensor_p_expanded = tensor_p.unsqueeze(2)
-        tensor_q_expanded = tensor_q.unsqueeze(1)
-
-        kl_div = F.kl_div(tensor_p_expanded.log(), tensor_q_expanded, reduction='none')
-        
-        # Sum over the last dimension to get the final KL divergence values
-        kl_div_summed = kl_div.sum(dim=-1)
-
-        return kl_div_summed
-
     
     def reconstruction_loss(
         self, 

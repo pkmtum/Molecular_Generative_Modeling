@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# models for single property inverse design with split latent kl-weighting
+python train_graph_vae.py --use_cached_dataset --properties=homo --kl_weight_property=1e-1 --property_latent_dim=16 --logdir=graph_vae_v2
+python train_graph_vae.py --use_cached_dataset --properties=lumo --kl_weight_property=1e-1 --property_latent_dim=16 --logdir=graph_vae_v2
+python train_graph_vae.py --use_cached_dataset --properties=r2 --kl_weight_property=1e-1 --property_latent_dim=16 --logdir=graph_vae_v2
