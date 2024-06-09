@@ -17,6 +17,7 @@ import torch_geometric.utils as pyg_utils
 
 import networkx as nx
 
+from rdkit.Chem import Crippen, QED
 from rdkit import RDLogger
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
@@ -346,7 +347,9 @@ def evaluate_model(
 
     total_decode_attempts = 0
     generated_mol_smiles = set()
-    z, x = graph_vae_model.sample(num_samples=num_samples, device=device)
+    logp_vals = []
+    qed_vals = []
+    _, x = graph_vae_model.sample(num_samples=num_samples, device=device)
     for i in tqdm(range(num_samples), "Generating Molecules"):
         sample_matrices = (x[0][i:i+1], x[1][i:i+1], x[2][i:i+1])
 
@@ -368,6 +371,9 @@ def evaluate_model(
                 # Molecule is invalid; try to decode again
                 continue
 
+            logp_vals.append(Crippen.MolLogP(mol))
+            qed_vals.append(QED.qed(mol))
+
             # Molecule is valid
             num_valid_mols += 1
             smiles = Chem.MolToSmiles(mol)
@@ -380,12 +386,19 @@ def evaluate_model(
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)
 
+    logp_tensor = torch.tensor(data=logp_vals)
+    qed_tensor = torch.tensor(data=qed_vals)
+
     metrics.update({
         "Mean Decode Attempts": total_decode_attempts / num_samples,
         "Connectedness": num_connected_graphs / total_decode_attempts,
         "Validity": num_valid_mols / total_decode_attempts,
         "Uniqueness": len(generated_mol_smiles) / max(num_valid_mols, 1),
-        "Novelty": novel_mol_count / max(len(generated_mol_smiles), 1),  
+        "Novelty": novel_mol_count / max(len(generated_mol_smiles), 1),
+        "LogP Mean": logp_tensor.mean().item(),
+        "LogP Std": logp_tensor.std().item(),
+        "QED Mean": qed_tensor.mean().item(),
+        "QED Std": qed_tensor.std().item(),
     })
     log_hparams["checkpoint"] = checkpoint_path
     tb_writer.add_hparams(hparam_dict=log_hparams, metric_dict=metrics)

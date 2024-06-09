@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import BatchNorm
 
-from graph_vae.encoder import ECCConv, GlobalGraphPooling
+from graph_vae.encoder import ECGConv, GlobalGraphPooling
 from .common import ResidualBlock
 
 
@@ -19,7 +19,7 @@ class MixtureModelEncoder(nn.Module):
 
         channels = [16, 32, 64, 128]
         module_list = [
-            ECCConv(
+            ECGConv(
                 num_edge_features=hparams["num_bond_types"],
                 in_channels=hparams["num_atom_types"],
                 out_channels=channels[0],
@@ -29,7 +29,7 @@ class MixtureModelEncoder(nn.Module):
         ]
         for i in range(len(channels) - 1):
             module_list.extend([
-                ECCConv(
+                ECGConv(
                     num_edge_features=hparams["num_bond_types"],
                     in_channels=channels[i],
                     out_channels=channels[i + 1],
@@ -60,7 +60,7 @@ class MixtureModelEncoder(nn.Module):
         x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
 
         for layer in self.gnn_layers:
-            if isinstance(layer, ECCConv):
+            if isinstance(layer, ECGConv):
                 x = layer(x, edge_index, edge_attr)
             else:
                 x = layer(x)

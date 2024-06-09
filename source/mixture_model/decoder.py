@@ -122,6 +122,7 @@ class MixtureModelDecoder(nn.Module):
         edge_index = edge_index.t().contiguous()
 
         if self.training:
+            # we don't need batch info during training
             return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types)
         else:
             batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)

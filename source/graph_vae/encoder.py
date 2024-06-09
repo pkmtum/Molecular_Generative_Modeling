@@ -12,7 +12,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import degree, scatter
 
 
-class ECCConv(MessagePassing):
+class ECGConv(MessagePassing):
     r""" The graph convolution operator from the 
     `"Dynamic Edge-Conditioned Filters in Convolutional Neural Networks on Graphs"
     <https://arxiv.org/abs/1704.02901>`_ paper """
@@ -93,21 +93,21 @@ class Encoder(nn.Module):
 
         self.latent_dim = hparams["latent_dim"]
 
-        self.ecc_conv_1 = ECCConv(
+        self.ecc_conv_1 = ECGConv(
             num_edge_features=hparams["num_edge_features"],
             in_channels=hparams["num_node_features"],
             out_channels=32
         )
         self.batch_norm_1 = BatchNorm(in_channels=32)
         self.relu_1 = nn.PReLU()
-        self.ecc_conv_2 = ECCConv(
+        self.ecc_conv_2 = ECGConv(
             num_edge_features=hparams["num_edge_features"],
             in_channels=32,
             out_channels=64
         )
         self.batch_norm_2 = BatchNorm(in_channels=64)
         self.relu_2 = nn.PReLU()
-        self.ecc_conv_3 = ECCConv(
+        self.ecc_conv_3 = ECGConv(
             num_edge_features=hparams["num_edge_features"],
             in_channels=64,
             out_channels=128
