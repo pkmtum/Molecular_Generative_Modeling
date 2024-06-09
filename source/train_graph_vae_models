@@ -4,13 +4,10 @@
 python train_graph_vae.py --include_hydrogen
 # generative model without property prediction ex
 python train_graph_vae.py
-# models with property prediction for inverse design
+# models with joint property prediction
 python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2
-python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2 --property_latent_dim=16
+python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2 --property_latent_dim=16 --kl_weight_property=1e-1
 # models for single property inverse design
-python train_graph_vae.py --use_cached_dataset --properties=homo
-python train_graph_vae.py --use_cached_dataset --properties=homo --property_latent_dim=16
-python train_graph_vae.py --use_cached_dataset --properties=lumo
-python train_graph_vae.py --use_cached_dataset --properties=lumo --property_latent_dim=16
-python train_graph_vae.py --use_cached_dataset --properties=r2
-python train_graph_vae.py --use_cached_dataset --properties=r2 --property_latent_dim=16
+python train_graph_vae.py --use_cached_dataset --properties=homo --property_latent_dim=16 --kl_weight_property=1e-1
+python train_graph_vae.py --use_cached_dataset --properties=lumo --property_latent_dim=16 --kl_weight_property=1e-1
+python train_graph_vae.py --use_cached_dataset --properties=r2 --property_latent_dim=16 --kl_weight_property=1e-1
