@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# generative model without property prediction including explicit hydrogen atoms
+# generative model without property prediction including hydrogen atoms
 python train_graph_vae.py --include_hydrogen
-# generative model without property prediction ex
+# generative model without property prediction excluding hydrogen atoms
 python train_graph_vae.py
 # models with joint property prediction
-python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2
-python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2 --property_latent_dim=16 --kl_weight_property=1e-1
+python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2  # without latent split
+python train_graph_vae.py --use_cached_dataset --properties=homo,lumo,r2 --property_latent_dim=16 --kl_weight_property=1e-1  # with latent split
 # models for single property inverse design
 python train_graph_vae.py --use_cached_dataset --properties=homo --property_latent_dim=16 --kl_weight_property=1e-1
 python train_graph_vae.py --use_cached_dataset --properties=lumo --property_latent_dim=16 --kl_weight_property=1e-1

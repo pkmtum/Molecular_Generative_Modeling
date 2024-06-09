@@ -219,6 +219,17 @@ def get_batch_item(batch_data: Data, i: int):
     )
 
 
+class SyntheticDataset(Dataset):
+    def __init__(self, data_list):
+        self.data_list = data_list
+    
+    def len(self):
+        return len(self.data_list)
+    
+    def get(self, idx):
+        return self.data_list[idx]
+
+
 def main():
     parser = argparse.ArgumentParser("Train the structured generative model on the QM9 dataset.")
     parser.add_argument("--include_hydrogen", action="store_true", help="Include hydrogen atoms in the training data.")
@@ -295,6 +306,11 @@ def main():
     }
 
     mixture_model = MixtureModel(hparams=hparams).to(device)
+
+
+    # TODO: generate synthetic dataset and replace training set
+
+
 
     optimizer = torch.optim.Adam(
         params=mixture_model.parameters(),
