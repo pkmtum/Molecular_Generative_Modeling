@@ -357,7 +357,7 @@ def create_qm9_graph_vae_dataset(
         include_hydrogen: bool, 
         refresh_data_cache: bool, 
         properties: Optional[List[str]],
-        prop_norm_df: pd.DataFrame,
+        prop_norm_df: Optional[pd.DataFrame],
     ) -> QM9:
 
     pre_transform_list = [SelectQM9NodeFeatures(features=["atom_type"])]
@@ -374,10 +374,9 @@ def create_qm9_graph_vae_dataset(
 
     transform_list = []
     if properties is not None:
-        transform_list.extend([
-            SelectQM9TargetProperties(properties=properties),
-            NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df)
-        ])
+        transform_list.append(SelectQM9TargetProperties(properties=properties))
+        if prop_norm_df is not None:
+            transform_list.append(NormalizeQM9Properties(properties=properties, prop_norm_df=prop_norm_df))
     transform_list.append(T.ToDevice(device=device))
     transform = T.Compose(transform_list)
 
