@@ -22,6 +22,8 @@ from rdkit import RDLogger
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
+import sascorer
+
 from graph_vae.vae import GraphVAE
 from data_utils import *
 
@@ -349,6 +351,7 @@ def evaluate_model(
     generated_mol_smiles = set()
     logp_vals = []
     qed_vals = []
+    sas_vals = []
     _, x = graph_vae_model.sample(num_samples=num_samples, device=device)
     for i in tqdm(range(num_samples), "Generating Molecules"):
         sample_matrices = (x[0][i:i+1], x[1][i:i+1], x[2][i:i+1])
@@ -373,6 +376,7 @@ def evaluate_model(
 
             logp_vals.append(Crippen.MolLogP(mol))
             qed_vals.append(QED.qed(mol))
+            sas_vals.append(sascorer.calculateScore(mol))
 
             # Molecule is valid
             num_valid_mols += 1
@@ -388,6 +392,7 @@ def evaluate_model(
 
     logp_tensor = torch.tensor(data=logp_vals)
     qed_tensor = torch.tensor(data=qed_vals)
+    sas_tensor = torch.tensor(data=sas_vals)
 
     metrics.update({
         "Mean Decode Attempts": total_decode_attempts / num_samples,
@@ -399,6 +404,8 @@ def evaluate_model(
         "LogP Std": logp_tensor.std().item(),
         "QED Mean": qed_tensor.mean().item(),
         "QED Std": qed_tensor.std().item(),
+        "SAS Mean": sas_tensor.mean().item(),
+        "SAS Std": sas_tensor.std().item(),
     })
     log_hparams["checkpoint"] = checkpoint_path
     tb_writer.add_hparams(hparam_dict=log_hparams, metric_dict=metrics)
@@ -513,6 +520,8 @@ def main():
         checkpoint = torch.load(args.checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         hparams = checkpoint["hparams"]
+        if "kl_weight_property" not in hparams:
+            hparams["kl_weight_property"] = kl_weight_property
         start_epoch = checkpoint['epoch'] + 1
         hparams["epochs"] = args.epochs + start_epoch
         hparams["stochastic_decoding"] = args.stochastic_decoding
