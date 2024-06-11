@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import BatchNorm
 
-from graph_vae.encoder import ECGConv, GlobalGraphPooling
+from graph_vae.encoder import ECGConv
 from .common import ResidualBlock
 
 
@@ -45,7 +45,7 @@ class MixtureModelEncoder(nn.Module):
         )
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
-        x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
         for layer in self.gnn_layers:
             if isinstance(layer, ECGConv):

@@ -16,11 +16,9 @@ class MixtureModelDecoder(nn.Module):
         z_dim = hparams["z_dim"]
         num_atom_types = hparams["num_atom_types"]
         num_bond_types = hparams["num_bond_types"] + 1  # +1 for non-existent bonds
-        self.uniform_cluster_probs = hparams["uniform_cluster_probs"]
 
         # model parameters
-        self.eta = nn.Parameter(torch.zeros(1, self.num_clusters), requires_grad=not self.uniform_cluster_probs)
-
+        self.eta = nn.Parameter(torch.zeros(1, self.num_clusters))
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
         self.cluster_log_sigmas = nn.Parameter(torch.ones(1, self.num_clusters, z_dim))
 
@@ -92,6 +90,7 @@ class MixtureModelDecoder(nn.Module):
 
         if self.training:
             # we don't need batch info during training
+            # this saves us time and memory
             return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types)
         else:
             batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)
@@ -103,7 +102,7 @@ class MixtureModelDecoder(nn.Module):
         z = self.sample_z(c=c)
         return self.decode_z(z, num_atoms)
 
-    def sample(self, num_atoms: torch.Tensor, device: str) -> Data:
+    def sample(self, num_atoms: torch.Tensor) -> Data:
         """
         Sample new molecules
         """

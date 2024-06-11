@@ -279,7 +279,7 @@ def smiles_to_image(smiles: str) -> torch.tensor:
     mol = Chem.MolFromSmiles(smiles)
     return mol_to_image_tensor(mol=mol)
 
-def graph_to_mol(data: Data, includes_h: bool, validate: bool):
+def graph_to_mol(data: Data, includes_h: bool, validate: bool, stochastic: bool = False):
     # create empty molecule
     mol = Chem.RWMol()
 
@@ -294,8 +294,14 @@ def graph_to_mol(data: Data, includes_h: bool, validate: bool):
 
     # Add atoms
     for atom_features in data.x:
-        # convert the one-hot encoded atom class to the atomic number
-        class_index = torch.argmax(atom_features[:5]).item()
+        if stochastic:
+            # sample the categorical distribution
+            probabilities = torch.softmax(atom_features, dim=0)
+            class_index = torch.multinomial(probabilities, 1).item()
+        else:
+            # convert the one-hot encoded atom class to the atomic number
+            class_index = torch.argmax(atom_features).item()
+
         atomic_number = int(class_index_to_atomic_number[class_index])
         atom = Chem.Atom(atomic_number)
         mol.AddAtom(atom)
@@ -304,8 +310,14 @@ def graph_to_mol(data: Data, includes_h: bool, validate: bool):
         # Create set of undirected bonds
         undirected_bonds = set()
         for edge_indices, edge_feature in zip(data.edge_index.t(), data.edge_attr):
+            if stochastic:
+                # sample the categorical distribution
+                probabilities = torch.softmax(edge_feature, dim=0)
+                bond_type_index = torch.multinomial(probabilities, 1).item()
+            else:
+                bond_type_index = torch.argmax(edge_feature).item()
+
             start_atom, end_atom = edge_indices
-            bond_type_index = torch.argmax(edge_feature).item()
             bond = tuple(sorted((start_atom.item(), end_atom.item())) + [bond_type_index])
             undirected_bonds.add(bond)
 

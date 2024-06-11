@@ -1,37 +1,10 @@
 #!/bin/bash
 
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=2
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=4
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=8
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=16
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=32
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=64
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=128
-
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=2
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=4
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=8
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=16
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=32
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=64
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=128
-
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=1 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=2 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=4 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=8 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=16 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=32 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=64 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=10 --num_clusters=128 --z_kl_weight=0.1
-
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=1 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=2 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=4 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=8 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=16 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=32 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=64 --z_kl_weight=0.1
-python train_mixture_model.py --use_cached_dataset --uniform_cluster_probs --epochs=20 --num_clusters=128 --z_kl_weight=0.1
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=1
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=2
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=4
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=8
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=16
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=32
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=64
+python train_mixture_model.py --use_cached_dataset --epochs=20 --num_clusters=128

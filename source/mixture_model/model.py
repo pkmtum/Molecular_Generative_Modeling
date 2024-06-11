@@ -19,8 +19,6 @@ class MixtureModel(nn.Module):
         self.encoder = MixtureModelEncoder(hparams=hparams)
         self.decoder = MixtureModelDecoder(hparams=hparams)
 
-        self.uniform_cluster_probs = hparams["uniform_cluster_probs"]
-
     @staticmethod
     def from_pretrained(checkpoint_path: str) -> MixtureModel:
         checkpoint = torch.load(checkpoint_path)
@@ -33,11 +31,4 @@ class MixtureModel(nn.Module):
         z_mu = encoded[0]
         z_sigma = encoded[1]
         z = torch.randn_like(z_mu) * z_sigma + z_mu
-        if self.uniform_cluster_probs:
-            return z
-
-        eta_mu = encoded[2]
-        eta_sigma = encoded[3]
-        eta = torch.randn_like(eta_mu) * eta_sigma + eta_mu
-        return z, eta
-        
+        return z
