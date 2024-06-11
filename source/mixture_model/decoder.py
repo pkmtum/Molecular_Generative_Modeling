@@ -6,40 +6,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 
-from .common import ResidualBlock
-
 
 class MixtureModelDecoder(nn.Module):
 
     def __init__(self, hparams: Dict[str, Any]) -> None:
         super().__init__()
 
-        self.eta_dim = hparams["eta_dim"]
-        num_clusters = hparams["num_clusters"]
-        self.num_clusters = num_clusters
+        self.num_clusters = hparams["num_clusters"]
         z_dim = hparams["z_dim"]
         num_atom_types = hparams["num_atom_types"]
         num_bond_types = hparams["num_bond_types"] + 1  # +1 for non-existent bonds
-        dropout_p = hparams["dropout"]
         self.uniform_cluster_probs = hparams["uniform_cluster_probs"]
 
         # model parameters
-        if not self.uniform_cluster_probs:
-            self.eta_mu = nn.Parameter(torch.zeros(1, self.eta_dim))
-            self.eta_log_sigma = nn.Parameter(torch.zeros(1, self.eta_dim))
-            cluster_mlp_hidden_dim = hparams["cluster_mlp_hidden_dim"]
-            if cluster_mlp_hidden_dim > 0:
-                self.cluster_mlp = ResidualBlock(
-                    in_features=self.eta_dim,
-                    hidden_features=cluster_mlp_hidden_dim,
-                    out_features=self.num_clusters,
-                    dropout=0,
-                )
-            else:
-                self.cluster_mlp = nn.Identity()
+        self.eta = nn.Parameter(torch.zeros(1, self.num_clusters), requires_grad=not self.uniform_cluster_probs)
 
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
         self.cluster_log_sigmas = nn.Parameter(torch.ones(1, self.num_clusters, z_dim))
+
         atom_type_mlp_hidden_dim = hparams["atom_type_mlp_hidden_dim"]
         self.atom_classifier = nn.Sequential(
             nn.Linear(z_dim, atom_type_mlp_hidden_dim),
@@ -47,18 +31,7 @@ class MixtureModelDecoder(nn.Module):
             nn.GELU(),
             nn.Linear(atom_type_mlp_hidden_dim, num_atom_types)
         )
-        bond_type_mlp_hidden_dim = hparams["bond_type_mlp_hidden_dim"]
-        if bond_type_mlp_hidden_dim > 0:
-            self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))
-            self.bond_type_mlp = ResidualBlock(
-                in_features=num_bond_types,
-                hidden_features=bond_type_mlp_hidden_dim,
-                out_features=num_bond_types,
-                dropout=0
-            )
-        else:
-            self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))
-            self.bond_type_mlp = nn.Identity()
+        self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))
         
         self.gumbel_softmax_temperature = 1.0
 
@@ -71,26 +44,14 @@ class MixtureModelDecoder(nn.Module):
 
     def set_gumbel_softmax_temperature(self, temperature: float):
         self.gumbel_softmax_temperature = temperature
-
-    def sample_eta(self, num_atoms: torch.Tensor, device: str) -> torch.Tensor:
-        randn = torch.randn(size=(num_atoms.size(0), self.eta_dim), device=device)
-        if self.uniform_cluster_probs:
-            return torch.ones_like(randn)
-        
-        eta_sigma = torch.exp(torch.clamp(self.eta_log_sigma, -20, 30))
-        eta = randn * eta_sigma + self.eta_mu
-        return eta
-
-    def decode_eta(self, eta: torch.Tensor) -> torch.Tensor:
-        if self.uniform_cluster_probs:
-            eta = torch.ones_like(eta)
-            return F.softmax(eta, dim=1)
-        pi = F.softmax(self.cluster_mlp(eta), dim=1)
-        return pi
+    
+    def get_pi(self) -> torch.Tensor:
+        return F.softmax(self.eta, dim=1)
     
     def sample_c(self, pi: torch.Tensor, num_atoms: torch.Tensor) -> torch.Tensor:
         # sample clusters using the gumbel-softmax reparameterization
         log_pi = torch.log(pi)
+        log_pi = log_pi.expand(num_atoms.shape[0], log_pi.shape[1])
         c = F.gumbel_softmax(
             logits=torch.repeat_interleave(log_pi, num_atoms, dim=0),
             tau=self.gumbel_softmax_temperature,
@@ -124,7 +85,7 @@ class MixtureModelDecoder(nn.Module):
         W = (self.bond_matrix + self.bond_matrix.transpose(2, 3)) * 0.5
 
         z_pairs = z[edge_index].unsqueeze(-2).unsqueeze(-1)
-        edge_type_logits = self.bond_type_mlp((z_pairs[:, 0].permute(dims=(0, 1, 3, 2)) @ W @ z_pairs[:, 1]).squeeze())
+        edge_type_logits = (z_pairs[:, 0].permute(dims=(0, 1, 3, 2)) @ W @ z_pairs[:, 1]).squeeze()
         edge_types = F.softmax(edge_type_logits, dim=1).squeeze()
 
         edge_index = edge_index.t().contiguous()
@@ -136,8 +97,8 @@ class MixtureModelDecoder(nn.Module):
             batch = torch.repeat_interleave(torch.arange(len(num_atoms), device=device), num_atoms)
             return Data(x=atom_types, edge_index=edge_index, edge_attr=edge_types, batch=batch)
 
-    def forward(self, eta: torch.Tensor, num_atoms: torch.Tensor) -> Data:
-        pi = self.decode_eta(eta)
+    def forward(self, num_atoms: torch.Tensor) -> Data:
+        pi = self.get_pi()
         c = self.sample_c(pi=pi, num_atoms=num_atoms)
         z = self.sample_z(c=c)
         return self.decode_z(z, num_atoms)
@@ -146,5 +107,4 @@ class MixtureModelDecoder(nn.Module):
         """
         Sample new molecules
         """
-        eta = self.sample_eta(num_atoms=num_atoms, device=device)
-        return self.forward(eta, num_atoms)
+        return self.forward(num_atoms)

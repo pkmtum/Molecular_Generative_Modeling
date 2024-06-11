@@ -66,7 +66,6 @@ def train_model(
     out_checkpoint = f"./checkpoints/mixture_model_{timestamp}.pt"
 
     epochs = hparams["epochs"]
-    eta_kl_weight = hparams["eta_kl_weight"]
     c_kl_weight = hparams["c_kl_weight"]
     z_kl_weight = hparams["z_kl_weight"]
     uniform_cluster_probs = hparams["uniform_cluster_probs"]
@@ -108,10 +107,7 @@ def train_model(
                 tau = max(0.5, math.exp(-r * iteration))
                 model.decoder.set_gumbel_softmax_temperature(tau)
 
-            if uniform_cluster_probs:
-                train_z_mu, train_z_sigma = model.encoder(train_batch)
-            else:
-                train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = model.encoder(train_batch)
+            train_z_mu, train_z_sigma = model.encoder(train_batch)
 
             train_z = torch.randn_like(train_z_mu) * train_z_sigma + train_z_mu
             train_num_atoms = torch.bincount(train_batch.batch)
@@ -131,26 +127,13 @@ def train_model(
             train_loss /= len(train_batch)
             train_log_likelihood = -train_loss
 
-            if not uniform_cluster_probs:
-                # eta KL-Divergence
-                eta_kl_divergence = kl_divergence_gaussian(
-                    mu_q=train_eta_mu,
-                    sigma_q=train_eta_sigma,
-                    mu_p=model.decoder.eta_mu,
-                    sigma_p=torch.exp(torch.clamp(model.decoder.eta_log_sigma, -30, 20))
-                ).mean()  # mean over batch
-                train_loss += eta_kl_divergence * eta_kl_weight * kl_weight
-
             # cluster KL-Divergence
-            if uniform_cluster_probs:
-                train_eta = torch.ones(size=(len(train_batch), model.decoder.eta_dim), device=device)
-            else:
-                train_eta = torch.randn_like(train_eta_mu) * train_eta_sigma + train_eta_mu
-            train_pi_p = model.decoder.decode_eta(train_eta)
+            train_pi_p = model.decoder.get_pi()
+            train_pi_p = train_pi_p.expand(len(train_batch), train_pi_p.shape[1])
 
             train_pi_p = torch.repeat_interleave(train_pi_p, train_num_atoms, dim=0)
             train_z_log_likelihoods = D.Normal(
-                loc=model.decoder.cluster_means, 
+                loc=model.decoder.cluster_means,
                 scale=torch.exp(torch.clamp(model.decoder.cluster_log_sigmas, -30, 20))
             ).log_prob(train_z.unsqueeze(1)).sum(dim=2)
             train_weighted_z_log_likelihood = train_z_log_likelihoods + torch.log(train_pi_p)
@@ -185,8 +168,6 @@ def train_model(
             # log to tensorboard
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
             tb_writer.add_scalars("Log-Likelihood", {"Training": train_log_likelihood.item()}, iteration)
-            if not uniform_cluster_probs:
-                tb_writer.add_scalar("Eta KL-Divergence", eta_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Cluster KL-Divergence", cluster_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Z KL-Divergence", z_kl_divergence.item(), iteration)
             tb_writer.add_scalar("KL Weight", kl_weight, iteration)
@@ -230,22 +211,6 @@ def get_batch_item(batch_data: Data, i: int):
     )
 
 
-class SyntheticDataset(Dataset):
-    def __init__(self, data_list, transform):
-        super().__init__()
-        self.data_list = data_list
-        self.transform = transform
-    
-    def len(self):
-        return len(self.data_list)
-    
-    def get(self, idx):
-        data = self.data_list[idx]
-        if self.transform:
-            data = self.transform(data)
-        return data
-
-
 def main():
     parser = argparse.ArgumentParser("Train the structured generative model on the QM9 dataset.")
     parser.add_argument("--include_hydrogen", action="store_true", help="Include hydrogen atoms in the training data.")
@@ -255,14 +220,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
     parser.add_argument("--num_clusters", type=int, default=32, help="Number of clusters in the gaussian mixture.")
-    parser.add_argument("--eta_dim", type=int, help="Dimension of the latent variable eta.")
     parser.add_argument("--z_dim", type=int, default=16, help="Dimension of the latent variable z.")
-    parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=0,
-        help="Number of dimensions of the hidden layer in the cluster MLP. If zero, the mapping from eta to pi is just a softmax."
-    )
-    parser.add_argument("--bond_type_mlp_hidden_dim", type=int, default=0,
-        help="Number of dimensions of the hidden layer in the bond type MLP. If zero, the mapping from a pair of latent vectors to a bond type is a linear operation."
-    )
     parser.add_argument("--atom_type_mlp_hidden_dim", type=int, default=64,
         help="Number of dimensions of the hidden layer in the atom type MLP."
     )
@@ -273,18 +231,8 @@ def main():
     parser.add_argument("--logdir", type=str, default="mixture_model", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in decoder MLPs.")
     parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="monotonic", help="Type of annealing schedule to use for the weight of the KL divergence.")
-    parser.add_argument("--use_synthetic_data", action="store_true", help="Train with model with data generated by itself for debugging purposes.")
     parser.add_argument("--uniform_cluster_probs", action="store_true", help="Use a simplified version of the model that assumes uniform and constant cluster probabilities.")
     args = parser.parse_args()
-
-    if args.eta_dim is None:
-        eta_dim = args.num_clusters
-    else:
-        eta_dim = args.eta_dim
-
-    if args.cluster_mlp_hidden_dim == 0 and eta_dim != args.num_clusters:
-        raise ValueError(f'eta_dim ({args.eta_dim}) must equal num_cluster ({args.num_clusters}) when cluster_mlp_hidden_dim = 0')
-
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -305,48 +253,22 @@ def main():
 
     hparams = {
         "include_hydrogen": args.include_hydrogen,
-        "eta_dim": eta_dim,
         "num_clusters": args.num_clusters,
         "z_dim": args.z_dim,
         "num_atom_types": dataset.num_node_features,
         "num_bond_types": dataset.num_edge_features,
-        "eta_kl_weight": args.eta_kl_weight,
         "c_kl_weight": args.c_kl_weight,
         "z_kl_weight": args.z_kl_weight,
-        "cluster_mlp_hidden_dim": args.cluster_mlp_hidden_dim,
-        "bond_type_mlp_hidden_dim": args.bond_type_mlp_hidden_dim,
         "atom_type_mlp_hidden_dim": args.atom_type_mlp_hidden_dim,
         "batch_size": batch_size,
         "learning_rate": args.learning_rate,
         "epochs": args.epochs,
         "dropout": args.dropout,
         "kl_schedule": args.kl_schedule,
-        "use_synthetic_data": args.use_synthetic_data,
         "uniform_cluster_probs": args.uniform_cluster_probs,
     }
 
     mixture_model = MixtureModel(hparams=hparams).to(device)
-
-    if args.use_synthetic_data:
-        mixture_model.eval()
-
-        # create synthetic dataset
-        graph_list = []
-        for _ in range(10):
-            num_mols = 10000
-            num_atoms = torch.tensor([9] * num_mols, dtype=torch.int64, device=device)
-            with torch.no_grad():
-                data = mixture_model.decoder.sample(num_atoms, device)
-            for i in tqdm(range(num_mols), desc="Generating synthetic data"):
-                graph = get_batch_item(data, i)
-                graph_list.append(graph)
-
-        transform = T.Compose([AddNullEdges(), T.ToDevice(device=device)])
-        synthetic_dataset = SyntheticDataset(data_list=graph_list, transform=transform)
-        train_loader = DataLoader(synthetic_dataset, batch_size=batch_size, shuffle=True)
-
-        mixture_model.train()
-
 
     optimizer = torch.optim.Adam(
         params=mixture_model.parameters(),
