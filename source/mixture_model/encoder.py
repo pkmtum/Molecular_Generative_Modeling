@@ -16,8 +16,9 @@ class MixtureModelEncoder(nn.Module):
 
         self.z_latent_dim = hparams["z_dim"]
         self.eta_latent_dim = hparams["eta_dim"]
+        self.uniform_cluster_probs = hparams["uniform_cluster_probs"]
 
-        channels = [16, 32, 64, 128]
+        channels = [16, 32, 64]
         module_list = [
             ECGConv(
                 num_edge_features=hparams["num_bond_types"],
@@ -44,17 +45,19 @@ class MixtureModelEncoder(nn.Module):
             hidden_features=128,
             out_features=self.z_latent_dim * 2,
         )
-        self.graph_pooling = GlobalGraphPooling(in_channels=channels[-1], out_channels=128)
-        self.eta_mu_head = ResidualBlock(
-            in_features=128,
-            hidden_features=128,
-            out_features=self.eta_latent_dim,
-        )
-        self.eta_log_sigma_head = ResidualBlock(
-            in_features=128,
-            hidden_features=128,
-            out_features=self.eta_latent_dim,
-        )
+
+        if not self.uniform_cluster_probs:
+            self.graph_pooling = GlobalGraphPooling(in_channels=channels[-1], out_channels=128)
+            self.eta_mu_head = ResidualBlock(
+                in_features=128,
+                hidden_features=128,
+                out_features=self.eta_latent_dim,
+            )
+            self.eta_log_sigma_head = ResidualBlock(
+                in_features=128,
+                hidden_features=128,
+                out_features=self.eta_latent_dim,
+            )
 
     def forward(self, data: Data) -> Tuple[torch.Tensor, torch.Tensor]:
         x, edge_index, batch, edge_attr = data.x, data.edge_index, data.batch, data.edge_attr
@@ -70,6 +73,9 @@ class MixtureModelEncoder(nn.Module):
         z_mu = z[:, :self.z_latent_dim]
         z_log_sigma = z[:, self.z_latent_dim:]
         z_sigma = torch.exp(torch.clamp(z_log_sigma, -30, 20))
+
+        if self.uniform_cluster_probs:
+            return z_mu, z_sigma
 
         eta_mu = self.eta_mu_head(self.graph_pooling(x, batch))
         eta_log_sigma = self.eta_log_sigma_head(self.graph_pooling(x, batch))

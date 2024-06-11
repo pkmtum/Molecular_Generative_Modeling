@@ -21,29 +21,31 @@ class MixtureModelDecoder(nn.Module):
         num_atom_types = hparams["num_atom_types"]
         num_bond_types = hparams["num_bond_types"] + 1  # +1 for non-existent bonds
         dropout_p = hparams["dropout"]
+        self.uniform_cluster_probs = hparams["uniform_cluster_probs"]
 
         # model parameters
-        self.eta_mu = nn.Parameter(torch.zeros(1, self.eta_dim))
-        self.eta_log_sigma = nn.Parameter(torch.zeros(1, self.eta_dim))
-        cluster_mlp_hidden_dim = hparams["cluster_mlp_hidden_dim"]
-        if cluster_mlp_hidden_dim > 0:
-            self.cluster_mlp = ResidualBlock(
-                in_features=self.eta_dim,
-                hidden_features=cluster_mlp_hidden_dim,
-                out_features=self.num_clusters,
-                dropout=dropout_p,
-            )
-        else:
-            self.cluster_mlp = nn.Identity()
+        if not self.uniform_cluster_probs:
+            self.eta_mu = nn.Parameter(torch.zeros(1, self.eta_dim))
+            self.eta_log_sigma = nn.Parameter(torch.zeros(1, self.eta_dim))
+            cluster_mlp_hidden_dim = hparams["cluster_mlp_hidden_dim"]
+            if cluster_mlp_hidden_dim > 0:
+                self.cluster_mlp = ResidualBlock(
+                    in_features=self.eta_dim,
+                    hidden_features=cluster_mlp_hidden_dim,
+                    out_features=self.num_clusters,
+                    dropout=0,
+                )
+            else:
+                self.cluster_mlp = nn.Identity()
 
         self.cluster_means = nn.Parameter(torch.randn(1, self.num_clusters, z_dim))
-        self.cluster_log_sigmas = nn.Parameter(torch.ones(1, self.num_clusters, z_dim) * -2.0)
+        self.cluster_log_sigmas = nn.Parameter(torch.ones(1, self.num_clusters, z_dim))
         atom_type_mlp_hidden_dim = hparams["atom_type_mlp_hidden_dim"]
-        self.atom_classifier = ResidualBlock(
-            in_features=z_dim,
-            hidden_features=atom_type_mlp_hidden_dim,
-            out_features=num_atom_types,
-            dropout=dropout_p
+        self.atom_classifier = nn.Sequential(
+            nn.Linear(z_dim, atom_type_mlp_hidden_dim),
+            nn.BatchNorm1d(atom_type_mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(atom_type_mlp_hidden_dim, num_atom_types)
         )
         bond_type_mlp_hidden_dim = hparams["bond_type_mlp_hidden_dim"]
         if bond_type_mlp_hidden_dim > 0:
@@ -52,7 +54,7 @@ class MixtureModelDecoder(nn.Module):
                 in_features=num_bond_types,
                 hidden_features=bond_type_mlp_hidden_dim,
                 out_features=num_bond_types,
-                dropout=dropout_p
+                dropout=0
             )
         else:
             self.bond_matrix = nn.Parameter(torch.randn(1, num_bond_types, z_dim, z_dim))
@@ -72,11 +74,17 @@ class MixtureModelDecoder(nn.Module):
 
     def sample_eta(self, num_atoms: torch.Tensor, device: str) -> torch.Tensor:
         randn = torch.randn(size=(num_atoms.size(0), self.eta_dim), device=device)
+        if self.uniform_cluster_probs:
+            return torch.ones_like(randn)
+        
         eta_sigma = torch.exp(torch.clamp(self.eta_log_sigma, -20, 30))
         eta = randn * eta_sigma + self.eta_mu
         return eta
 
     def decode_eta(self, eta: torch.Tensor) -> torch.Tensor:
+        if self.uniform_cluster_probs:
+            eta = torch.ones_like(eta)
+            return F.softmax(eta, dim=1)
         pi = F.softmax(self.cluster_mlp(eta), dim=1)
         return pi
     

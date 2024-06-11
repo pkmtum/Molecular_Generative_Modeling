@@ -44,12 +44,12 @@ def kl_divergence_categorical(pi_q, pi_p):
 def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteration: int) -> float:
     length = end_iteration - start_iteration
     x = min(max(iteration - start_iteration, 0) / length, 1)
-    return 0.5 * (1 + math.cos((1 + x) * math.pi)) * 0.999999 + 0.000001
+    return 0.5 * (1 + math.cos((1 + x) * math.pi)) + 1e-8
 
 
 def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
     cosine_length = cycle_length // 2
-    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) * 0.999999 + 0.000001
+    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) + 1e-8
 
 
 def train_model(
@@ -69,6 +69,7 @@ def train_model(
     eta_kl_weight = hparams["eta_kl_weight"]
     c_kl_weight = hparams["c_kl_weight"]
     z_kl_weight = hparams["z_kl_weight"]
+    uniform_cluster_probs = hparams["uniform_cluster_probs"]
 
     model.train()
 
@@ -88,8 +89,8 @@ def train_model(
         kl_schedule_func = functools.partial(cyclic_cosine_schedule, cycle_length=cycle_length)
     elif kl_schedule_type == "monotonic":
         total_iteration_count = len(train_loader) * epochs
-        start_iteration = int(total_iteration_count * 0.25)
-        end_iteration = int(total_iteration_count * 0.75)
+        start_iteration = int(total_iteration_count * 0.0)
+        end_iteration = int(total_iteration_count * 0.25)
         kl_schedule_func = functools.partial(monotonic_cosine_schedule, start_iteration=start_iteration, end_iteration=end_iteration)
 
     for epoch in range(epochs):
@@ -107,7 +108,11 @@ def train_model(
                 tau = max(0.5, math.exp(-r * iteration))
                 model.decoder.set_gumbel_softmax_temperature(tau)
 
-            train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = model.encoder(train_batch)
+            if uniform_cluster_probs:
+                train_z_mu, train_z_sigma = model.encoder(train_batch)
+            else:
+                train_z_mu, train_z_sigma, train_eta_mu, train_eta_sigma = model.encoder(train_batch)
+
             train_z = torch.randn_like(train_z_mu) * train_z_sigma + train_z_mu
             train_num_atoms = torch.bincount(train_batch.batch)
             train_reconstruction = model.decoder.decode_z(train_z, train_num_atoms)
@@ -126,17 +131,21 @@ def train_model(
             train_loss /= len(train_batch)
             train_log_likelihood = -train_loss
 
-            # eta KL-Divergence
-            eta_kl_divergence = kl_divergence_gaussian(
-                mu_q=train_eta_mu,
-                sigma_q=train_eta_sigma,
-                mu_p=model.decoder.eta_mu,
-                sigma_p=torch.exp(torch.clamp(model.decoder.eta_log_sigma, -30, 20))
-            ).mean()  # mean over batch
-            train_loss += eta_kl_divergence * eta_kl_weight * kl_weight
+            if not uniform_cluster_probs:
+                # eta KL-Divergence
+                eta_kl_divergence = kl_divergence_gaussian(
+                    mu_q=train_eta_mu,
+                    sigma_q=train_eta_sigma,
+                    mu_p=model.decoder.eta_mu,
+                    sigma_p=torch.exp(torch.clamp(model.decoder.eta_log_sigma, -30, 20))
+                ).mean()  # mean over batch
+                train_loss += eta_kl_divergence * eta_kl_weight * kl_weight
 
             # cluster KL-Divergence
-            train_eta = torch.randn_like(train_eta_mu) * train_eta_sigma + train_eta_mu
+            if uniform_cluster_probs:
+                train_eta = torch.ones(size=(len(train_batch), model.decoder.eta_dim), device=device)
+            else:
+                train_eta = torch.randn_like(train_eta_mu) * train_eta_sigma + train_eta_mu
             train_pi_p = model.decoder.decode_eta(train_eta)
 
             train_pi_p = torch.repeat_interleave(train_pi_p, train_num_atoms, dim=0)
@@ -176,9 +185,11 @@ def train_model(
             # log to tensorboard
             tb_writer.add_scalars("Loss", {"Training": train_loss.item()}, iteration)
             tb_writer.add_scalars("Log-Likelihood", {"Training": train_log_likelihood.item()}, iteration)
-            tb_writer.add_scalar("Eta KL-Divergence", eta_kl_divergence.item(), iteration)
+            if not uniform_cluster_probs:
+                tb_writer.add_scalar("Eta KL-Divergence", eta_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Cluster KL-Divergence", cluster_kl_divergence.item(), iteration)
             tb_writer.add_scalar("Z KL-Divergence", z_kl_divergence.item(), iteration)
+            tb_writer.add_scalar("KL Weight", kl_weight, iteration)
 
         # save checkpoint
         torch.save({
@@ -220,14 +231,19 @@ def get_batch_item(batch_data: Data, i: int):
 
 
 class SyntheticDataset(Dataset):
-    def __init__(self, data_list):
+    def __init__(self, data_list, transform):
+        super().__init__()
         self.data_list = data_list
+        self.transform = transform
     
     def len(self):
         return len(self.data_list)
     
     def get(self, idx):
-        return self.data_list[idx]
+        data = self.data_list[idx]
+        if self.transform:
+            data = self.transform(data)
+        return data
 
 
 def main():
@@ -238,9 +254,9 @@ def main():
     )
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
-    parser.add_argument("--num_clusters", type=int, default=4, help="Number of clusters in the gaussian mixture.")
+    parser.add_argument("--num_clusters", type=int, default=32, help="Number of clusters in the gaussian mixture.")
     parser.add_argument("--eta_dim", type=int, help="Dimension of the latent variable eta.")
-    parser.add_argument("--z_dim", type=int, default=32, help="Dimension of the latent variable z.")
+    parser.add_argument("--z_dim", type=int, default=16, help="Dimension of the latent variable z.")
     parser.add_argument("--cluster_mlp_hidden_dim", type=int, default=0,
         help="Number of dimensions of the hidden layer in the cluster MLP. If zero, the mapping from eta to pi is just a softmax."
     )
@@ -253,10 +269,12 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--eta_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over eta in the loss.")
     parser.add_argument("--c_kl_weight", type=float, default=1.0, help="Weight of the KL-divergence over the cluster probabilities in the loss.")
-    parser.add_argument("--z_kl_weight", type=float, default=0.02, help="Weight of the KL-divergence over the z in the loss.")
+    parser.add_argument("--z_kl_weight", type=float, default=0.05, help="Weight of the KL-divergence over the z in the loss.")
     parser.add_argument("--logdir", type=str, default="mixture_model", help="Name of the Tensorboard logging directory.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in decoder MLPs.")
-    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="cyclical", help="Type of annealing schedule to use for the weight of the KL divergence.")
+    parser.add_argument("--kl_schedule", type=str, choices=["constant", "cyclical", "monotonic"], default="monotonic", help="Type of annealing schedule to use for the weight of the KL divergence.")
+    parser.add_argument("--use_synthetic_data", action="store_true", help="Train with model with data generated by itself for debugging purposes.")
+    parser.add_argument("--uniform_cluster_probs", action="store_true", help="Use a simplified version of the model that assumes uniform and constant cluster probabilities.")
     args = parser.parse_args()
 
     if args.eta_dim is None:
@@ -275,7 +293,7 @@ def main():
     dataset = create_qm9_mixture_vae_dataset(
         device=device, 
         include_hydrogen=args.include_hydrogen,
-        refresh_data_cache=args.use_cached_dataset,
+        refresh_data_cache=not args.use_cached_dataset,
         properties=None,
         prop_norm_df=prop_norm_df
     )
@@ -303,13 +321,31 @@ def main():
         "epochs": args.epochs,
         "dropout": args.dropout,
         "kl_schedule": args.kl_schedule,
+        "use_synthetic_data": args.use_synthetic_data,
+        "uniform_cluster_probs": args.uniform_cluster_probs,
     }
 
     mixture_model = MixtureModel(hparams=hparams).to(device)
 
+    if args.use_synthetic_data:
+        mixture_model.eval()
 
-    # TODO: generate synthetic dataset and replace training set
+        # create synthetic dataset
+        graph_list = []
+        for _ in range(10):
+            num_mols = 10000
+            num_atoms = torch.tensor([9] * num_mols, dtype=torch.int64, device=device)
+            with torch.no_grad():
+                data = mixture_model.decoder.sample(num_atoms, device)
+            for i in tqdm(range(num_mols), desc="Generating synthetic data"):
+                graph = get_batch_item(data, i)
+                graph_list.append(graph)
 
+        transform = T.Compose([AddNullEdges(), T.ToDevice(device=device)])
+        synthetic_dataset = SyntheticDataset(data_list=graph_list, transform=transform)
+        train_loader = DataLoader(synthetic_dataset, batch_size=batch_size, shuffle=True)
+
+        mixture_model.train()
 
 
     optimizer = torch.optim.Adam(
@@ -352,7 +388,7 @@ def main():
 
     # evaluate the model by generating 1000 molecules
     mixture_model.eval()
-    num_generated_mols = 1000
+    num_generated_mols = 10000
     num_atoms = torch.tensor([9] * num_generated_mols, dtype=torch.int64, device=device)
     with torch.no_grad():
         data = mixture_model.decoder.sample(num_atoms, device)
