@@ -4,8 +4,6 @@ from typing import Dict, Any, Tuple
 import torch
 import torch.nn as nn
 from torch_geometric.data import Data
-from torch_geometric.nn import BatchNorm
-
 
 from .encoder import MixtureModelEncoder
 from .decoder import MixtureModelDecoder

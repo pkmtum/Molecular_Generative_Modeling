@@ -65,6 +65,11 @@ def train_model(
         hparams: Dict[str, Any],
         start_epoch: int,
     ) -> str:
+
+    seed = hparams["seed"]
+    torch.manual_seed(seed)
+    print(f"Training with random seed: {seed}")
+
     # create checkpoint dir and unique filename
     os.makedirs("./checkpoints/", exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -337,9 +342,15 @@ def main():
     parser.add_argument("--checkpoint", type=str, help="Checkpoint to resume training and evaluation from.")
     parser.add_argument("--mol_size", type=int, default=9, help="Size of the molecules to generate during evaluation.")
     parser.add_argument("--stochastic_decoding", action="store_true", help="Sample the decoder during evaluation instead of taking the argmax.")
+    parser.add_argument("--seed", type=int, help="Random seed for reproducible training.")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if args.seed is not None:
+        seed = args.seed
+    else:
+        seed = random.randint(0, 2**32 - 1)
 
     # create data set and data loaders
     prop_norm_df = create_or_load_property_norm_df()
@@ -371,6 +382,7 @@ def main():
         "kl_schedule": args.kl_schedule,
         "mol_size": args.mol_size,
         "stochastic_decoding": args.stochastic_decoding,
+        "seed": seed,
     }
 
     mixture_model = MixtureModel(hparams=hparams).to(device)
