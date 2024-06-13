@@ -258,9 +258,6 @@ def evaluate_model(
     mixture_model.eval()
     num_generated_mols = 32_000
     mol_size = hparams["mol_size"]
-    num_atoms = torch.tensor([mol_size] * num_generated_mols, dtype=torch.int64, device=device)
-    with torch.no_grad():
-        data = mixture_model.decoder.sample(num_atoms)
 
     num_valid_mols = 0
     num_connected_graphs = 0
@@ -269,28 +266,36 @@ def evaluate_model(
     sas_vals = []
     generated_mol_smiles = set()
     stochastic = hparams["stochastic_decoding"]
-    for i in tqdm(range(num_generated_mols), desc="Generating Molecules"):
-        graph = get_batch_item(data, i)
 
-        if nx.is_connected(pyg_utils.to_networkx(graph, to_undirected=True)):
-            num_connected_graphs += 1
-        else:
-            continue
+    # generated in 4 batches to save memory
+    batch_count = 4
+    for _ in range(batch_count):
+        num_atoms = torch.tensor([mol_size] * int(num_generated_mols / batch_count), dtype=torch.int64, device=device)
+        with torch.no_grad():
+            data = mixture_model.decoder.sample(num_atoms)
 
-        try:
-            mol = graph_to_mol(data=graph, includes_h=include_hydrogen, validate=True, stochastic=stochastic)
-        except:
-            continue
-        num_valid_mols += 1
+        for i in tqdm(range(int(num_generated_mols / batch_count)), desc="Generating Molecules"):
+            graph = get_batch_item(data, i)
 
-        logp_vals.append(Crippen.MolLogP(mol))
-        qed_vals.append(QED.qed(mol))
-        sas_vals.append(sascorer.calculateScore(mol))
+            if nx.is_connected(pyg_utils.to_networkx(graph, to_undirected=True)):
+                num_connected_graphs += 1
+            else:
+                continue
 
-        smiles = Chem.MolToSmiles(mol)
-        if smiles not in generated_mol_smiles:
-            tb_writer.add_image('Generated Valid', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
-            generated_mol_smiles.add(Chem.MolToSmiles(mol))
+            try:
+                mol = graph_to_mol(data=graph, includes_h=include_hydrogen, validate=True, stochastic=stochastic)
+            except:
+                continue
+            num_valid_mols += 1
+
+            logp_vals.append(Crippen.MolLogP(mol))
+            qed_vals.append(QED.qed(mol))
+            sas_vals.append(sascorer.calculateScore(mol))
+
+            smiles = Chem.MolToSmiles(mol)
+            if smiles not in generated_mol_smiles:
+                tb_writer.add_image('Generated Valid', mol_to_image_tensor(mol=mol), global_step=len(generated_mol_smiles), dataformats="NCHW")
+                generated_mol_smiles.add(Chem.MolToSmiles(mol))
 
     non_novel_mols = train_mol_smiles.intersection(generated_mol_smiles)
     novel_mol_count = len(generated_mol_smiles) - len(non_novel_mols)

@@ -24,7 +24,7 @@ class MixtureModel(nn.Module):
         graph_vae_model.load_state_dict(checkpoint['model_state_dict'])
         return graph_vae_model
     
-    def encode(self, x: Data) -> Tuple[torch.Tensor, torch.Tensor]:
+    def encode(self, x: Data) -> torch.Tensor:
         encoded = self.encoder(x)
         z_mu = encoded[0]
         z_sigma = encoded[1]
