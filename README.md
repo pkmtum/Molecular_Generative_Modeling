@@ -8,7 +8,6 @@ conda activate idp
 ``` 
 
 ## Model Checkpoints
-https://drive.google.com/drive/folders/1AevYhNYIih6OiZ-97LklmQzSvTbatCuO?usp=drive_link
 
 - Download the checkpoints from [here](url) and place the .pt files in `source/checkpoints`
 
