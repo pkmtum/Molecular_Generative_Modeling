@@ -49,12 +49,12 @@ def kl_divergence_categorical(pi_q, pi_p):
 def monotonic_cosine_schedule(iteration: int, start_iteration: int, end_iteration: int) -> float:
     length = end_iteration - start_iteration
     x = min(max(iteration - start_iteration, 0) / length, 1)
-    return 0.5 * (1 + math.cos((1 + x) * math.pi)) + 1e-8
+    return 0.5 * (1 + math.cos((1 + x) * math.pi))
 
 
 def cyclic_cosine_schedule(iteration: int, cycle_length: int) -> float:
     cosine_length = cycle_length // 2
-    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi)) + 1e-8
+    return 0.5 * (1 + math.cos((1 + min(1, (iteration % cycle_length) / cosine_length)) * math.pi))
 
 
 def train_model(
